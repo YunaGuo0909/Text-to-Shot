@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+.env
+.venv/
+
+# uv
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data & Models (too large for git)
+data/raw/
+data/processed/
+checkpoints/
+pretrained/
+*.pth
+*.pt
+*.ckpt
+*.h5
+
+# SMPL model files
+body_models/
+
+# Results (large files)
+outputs/
+results/visualizations/
+*.mp4
+*.mov
+*.avi
+
+# Logs
+logs/
+wandb/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+paper_text.txt
+extract_pdf.py

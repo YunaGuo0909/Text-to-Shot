@@ -1,0 +1,113 @@
+# ============================================================
+# AI-Driven Storyboard Generation - Default Configuration
+# ============================================================
+
+# --- Model Architecture ---
+model:
+  # Character pose dimensions (25 joints × 6D rotation = 150)
+  char_pose_dim: 150
+  # Camera state dimensions (Toric: pA_x, pA_y, pB_x, pB_y, theta, phi)
+  camera_dim: 6
+  # Hidden dimension for transformer branches
+  hidden_dim: 512
+  # Number of transformer layers per branch
+  num_layers: 4
+  # Number of attention heads
+  num_heads: 8
+  # Dropout rate
+  dropout: 0.1
+  # FiLM conditioning dimension
+  film_dim: 256
+
+# --- Diffusion Settings ---
+diffusion:
+  # Number of diffusion timesteps
+  num_timesteps: 1000
+  # Beta schedule type: linear, cosine
+  beta_schedule: cosine
+  # Beta range (for linear schedule)
+  beta_start: 0.0001
+  beta_end: 0.02
+
+# --- Text Encoder ---
+text_encoder:
+  # CLIP model name
+  model_name: "openai/clip-vit-base-patch32"
+  # Maximum text length
+  max_length: 77
+  # Freeze text encoder
+  freeze: true
+
+# --- Shot Type Settings ---
+shot_types:
+  categories:
+    - "close-up"
+    - "medium-shot"
+    - "wide-shot"
+    - "over-the-shoulder"
+    - "two-shot"
+  embedding_dim: 64
+
+# --- Training ---
+training:
+  batch_size: 64
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  num_epochs: 500
+  lr_scheduler: cosine
+  warmup_epochs: 10
+  gradient_clip: 1.0
+  save_interval: 50
+  eval_interval: 10
+
+# --- Data ---
+data:
+  dataset_name: "interhuman"
+  data_root: "./data"
+  num_workers: 4
+  pin_memory: true
+
+# --- Camera Trajectory ---
+trajectory:
+  # Default trajectory length in frames (at 24fps)
+  default_num_frames: 48
+  # Available motion types
+  motion_types:
+    - "static"
+    - "dolly-in"
+    - "dolly-out"
+    - "pan-left"
+    - "pan-right"
+    - "crane-up"
+    - "crane-down"
+    - "track"
+    - "orbit"
+  # Interpolation method: catmull-rom, cubic-spline
+  interpolation: cubic-spline
+  # Default intensity (1.0 = normal, 0.5 = subtle, 2.0 = dramatic)
+  default_intensity: 1.0
+
+# --- Storyboard Rendering ---
+rendering:
+  # Panel resolution
+  panel_width: 640
+  panel_height: 360
+  # Grid layout
+  grid_cols: 3
+  # Stick figure style
+  line_width: 2
+  joint_radius: 4
+  # Colors
+  char_a_color: "#FF6B6B"
+  char_b_color: "#4ECDC4"
+  trajectory_color: "#FFE66D"
+  camera_color: "#FFE66D"
+  background_color: "#2C3E50"
+  # Show trajectory overlay on panels
+  show_trajectory: true
+
+# --- Paths ---
+paths:
+  checkpoint_dir: "./checkpoints"
+  output_dir: "./outputs"
+  log_dir: "./logs"
