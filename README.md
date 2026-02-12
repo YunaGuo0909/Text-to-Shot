@@ -35,7 +35,7 @@ Scene Description ──▶ Shot Decomposer ──▶ Diffusion Generator ──
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/masterclass02.git
+git clone https://github.com/YunaGuo0909/masterclass02.git
 cd masterclass02
 
 # Install dependencies with uv
