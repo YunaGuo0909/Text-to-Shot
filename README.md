@@ -1,14 +1,14 @@
-# 🎬 AI-Driven Storyboard Generation
+# AI-Driven Storyboard Generation
 
 **Extending Text-to-Shot Diffusion for Multi-Shot Visual Pre-production with Camera Motion Trajectories**
 
-> NCCA Masterclass Project — Extending *"From Script to Shot: Joint Generation of Camera Pose and Dual-Human 3D Actions"* (SIGGRAPH 2026)
+
 
 ---
 
 ## Overview
 
-This project extends a SIGGRAPH 2026 paper that generates **a single static shot** (camera pose + two-character 3D poses) from text, into a full **multi-shot storyboard pipeline** with **dynamic camera motion trajectories**.
+This project extends prior work on joint character-camera generation — which produces **a single static shot** (camera pose + two-character 3D poses) from text — into a full **multi-shot storyboard pipeline** with **dynamic camera motion trajectories**.
 
 Given a scene description like *"Two people meet at a cafe, shake hands and sit down"*, the system automatically:
 
@@ -35,8 +35,8 @@ Scene Description ──▶ Shot Decomposer ──▶ Diffusion Generator ──
 
 ```bash
 # Clone the repository
-git clone https://github.com/YunaGuo0909/masterclass02.git
-cd masterclass02
+git clone https://github.com/YunaGuo0909/Text-to-Shot.git
+cd Text-to-Shot
 
 # Install dependencies with uv
 uv sync
@@ -56,7 +56,7 @@ The demo generates:
 ## Project Structure
 
 ```
-masterclass02/
+Text-to-Shot/
 ├── configs/
 │   └── default.yaml              # Model, training & rendering configuration
 ├── src/
@@ -184,7 +184,6 @@ uv run python train.py --config configs/default.yaml --device cuda
 
 ## Acknowledgments
 
-- Base paper: *"From Script to Shot: Joint Generation of Camera Pose and Dual-Human 3D Actions"* (SIGGRAPH 2026)
 - Toric camera space: Lino & Christie (2015), ACM TOG
 - DDPM: Ho, Jain & Abbeel (2020)
 - FiLM conditioning: Perez et al. (2018)

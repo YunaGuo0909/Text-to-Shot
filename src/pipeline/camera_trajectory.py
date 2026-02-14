@@ -16,7 +16,7 @@ Camera motion types supported:
   - track: Lateral tracking shot following action (跟踪)
   - orbit: Orbit around subjects (环绕)
 
-This is a NEW module not present in the original paper, representing a
+This is a NEW module extending the baseline method, representing a
 key extension from static shot generation to dynamic camera trajectories.
 
 Reference:

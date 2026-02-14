@@ -46,9 +46,9 @@ Scene: "{scene_description}"
 Output as JSON array.
 ```
 
-### Module 2: Shot-Level Generator (基于原论文模型扩展)
+### Module 2: Shot-Level Generator (基于基线模型扩展)
 
-**基础**: 直接复用/微调原论文的 Joint Character-Camera Diffusion Model
+**基础**: 直接复用/微调基线方法的 Joint Character-Camera Diffusion Model
 
 **扩展点**:
 
@@ -83,10 +83,10 @@ def coherence_guidance(prev_shot, current_noisy, t):
 
 ### Module 3: Camera Motion Trajectory Generator (🆕 核心创新模块)
 
-**目标**: 将原论文生成的静态 Toric 镜头位姿扩展为时序上的镜头运动轨迹。
+**目标**: 将基线方法生成的静态 Toric 镜头位姿扩展为时序上的镜头运动轨迹。
 
 **核心思路**:
-原论文生成的是单一静态镜头配置 `x_C ∈ R^6`（Toric参数），这里将其扩展为生成 **T 个关键帧**组成的时序轨迹 `X_C ∈ R^(K×6)`，并通过样条插值得到连续平滑的镜头运动路径。
+基线方法生成的是单一静态镜头配置 `x_C ∈ R^6`（Toric参数），这里将其扩展为生成 **T 个关键帧**组成的时序轨迹 `X_C ∈ R^(K×6)`，并通过样条插值得到连续平滑的镜头运动路径。
 
 **方法**: 两阶段方案（更可控、更稳定）：
 

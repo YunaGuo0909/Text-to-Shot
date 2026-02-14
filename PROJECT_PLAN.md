@@ -2,7 +2,7 @@
 ## Extending Text-to-Shot Diffusion for Multi-Shot Visual Pre-production
 
 ### Project Overview
-This project extends the SIGGRAPH 2026 paper "From Script to Shot: Joint Generation of Camera Pose and Dual-Human 3D Actions" toward automated storyboard generation with **camera motion trajectories** for media pre-production. The original work generates a single static shot configuration (camera pose + dual-human 3D poses) from text. This project extends it in two key directions:
+This project extends prior work on joint character-camera generation toward automated storyboard generation with **camera motion trajectories** for media pre-production. The base method generates a single static shot configuration (camera pose + dual-human 3D poses) from text. This project extends it in two key directions:
 1. **Multi-shot pipeline**: Takes a full scene description and produces a coherent sequence of visual storyboard panels
 2. **Camera motion trajectory generation**: Extends static camera pose to temporal camera trajectories (dolly, pan, track, etc.)
 
@@ -16,8 +16,8 @@ This project aligns with Mo-sys's AI/ML innovation area: **Pre-production → St
 
 | Week | Tasks | Deliverables |
 |------|-------|-------------|
-| Week 1 (Feb 12-18) | - Literature review: storyboard generation, cinematic AI, diffusion models, DanceCamera3D<br>- Deep dive into the original paper's codebase<br>- Study Toric camera parameterization, SMPL representation<br>- Set up uv environment | Literature notes, dev environment ready |
-| Week 2 (Feb 19-25) | - Reproduce baseline single-shot generation model<br>- Validate results against paper's reported outputs<br>- Study camera trajectory representations (Bézier, spline, keyframe)<br>- Weekly tutorial discussion | Baseline reproduction results |
+| Week 1 (Feb 12-18) | - Literature review: storyboard generation, cinematic AI, diffusion models, DanceCamera3D<br>- Deep dive into the baseline model codebase<br>- Study Toric camera parameterization, SMPL representation<br>- Set up uv environment | Literature notes, dev environment ready |
+| Week 2 (Feb 19-25) | - Reproduce baseline single-shot generation model<br>- Validate results against baseline reported outputs<br>- Study camera trajectory representations (Bézier, spline, keyframe)<br>- Weekly tutorial discussion | Baseline reproduction results |
 
 #### Phase 2: Core Development (Week 3-6, Feb 26 - Mar 25)
 

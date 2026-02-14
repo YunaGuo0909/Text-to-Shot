@@ -62,3 +62,5 @@ desktop.ini
 *.bak
 paper_text.txt
 extract_pdf.py
+
+*.pdf

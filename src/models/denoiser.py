@@ -166,7 +166,7 @@ class JointDenoiser(nn.Module):
         delta_C_to_A, delta_A_to_C = self.interaction_AC(h_A, h_C, condition)
         delta_C_to_B, delta_B_to_C = self.interaction_BC(h_B, h_C, condition)
 
-        # Refine embeddings (Eq. 10-12 in paper)
+        # Refine embeddings via pairwise interaction
         h_A_refined = h_A + delta_B_to_A + delta_C_to_A
         h_B_refined = h_B + delta_A_to_B + delta_C_to_B
         h_C_refined = h_C + delta_A_to_C + delta_B_to_C
