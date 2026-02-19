@@ -1,7 +1,7 @@
 [project]
-name = "ai-storyboard"
+name = "script-to-camera"
 version = "0.1.0"
-description = "AI-Driven Storyboard Generation: Extending Text-to-Shot Diffusion for Multi-Shot Visual Pre-production with Camera Motion Trajectories"
+description = "Script-to-Camera: Generating Cinematic Camera Motion Trajectories from Screenplays via Diffusion Models"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -11,10 +11,6 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
 
-    # Human Body Model
-    "smplx>=0.1.28",
-    "numpy>=1.24.0",
-
     # Text Processing
     "transformers>=4.30.0",
     "sentence-transformers>=2.2.0",
@@ -23,8 +19,6 @@ dependencies = [
     # Visualization
     "matplotlib>=3.7.0",
     "Pillow>=9.5.0",
-    "open3d>=0.17.0",
-    "trimesh>=3.22.0",
 
     # Experiment Tracking
     "tensorboard>=2.13.0",
@@ -32,6 +26,7 @@ dependencies = [
 
     # Data Processing
     "scipy>=1.10.0",
+    "numpy>=1.24.0",
     "tqdm>=4.65.0",
     "PyYAML>=6.0",
     "einops>=0.6.0",

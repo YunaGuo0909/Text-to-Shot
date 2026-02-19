@@ -1,26 +1,23 @@
-# AI-Driven Storyboard Generation
+# Script-to-Camera
 
-**Extending Text-to-Shot Diffusion for Multi-Shot Visual Pre-production with Camera Motion Trajectories**
-
-
+**Generating Cinematic Camera Motion Trajectories from Screenplays via Diffusion Models**
 
 ---
 
 ## Overview
 
-This project extends prior work on joint character-camera generation — which produces **a single static shot** (camera pose + two-character 3D poses) from text — into a full **multi-shot storyboard pipeline** with **dynamic camera motion trajectories**.
-
-Given a scene description like *"Two people meet at a cafe, shake hands and sit down"*, the system automatically:
+This project proposes a diffusion-based framework that automatically generates cinematic camera motion trajectories from textual scene descriptions. Given a screenplay excerpt, the system:
 
 1. **Decomposes** the scene into a sequence of cinematic shots (via LLM)
-2. **Generates** 3D character poses + camera framing for each shot (via diffusion model)
-3. **Creates camera motion trajectories** for each shot (dolly, pan, track, crane, orbit, etc.)
-4. **Renders** the complete storyboard as annotated panels with motion path overlays
+2. **Generates** smooth camera motion trajectories in Toric parameter space (via diffusion model)
+3. **Visualizes** the trajectories as parameter curves, camera path diagrams, and multi-shot grids
 
 ```
-Scene Description ──▶ Shot Decomposer ──▶ Diffusion Generator ──▶ Trajectory Generator ──▶ Storyboard Renderer
-     (text)             (LLM-based)        (per-shot 3D)         (keyframe → spline)        (panels + paths)
+Screenplay ──▶ Shot Decomposer ──▶ Trajectory Diffusion Model ──▶ Trajectory Visualizer
+  (text)          (LLM-based)         (Toric space DDPM)           (curves + paths)
 ```
+
+Training data is constructed by extracting camera parameters from real film shots sourced from **ShotDeck**, bridging computational cinematography and generative AI.
 
 ---
 
@@ -34,22 +31,27 @@ Scene Description ──▶ Shot Decomposer ──▶ Diffusion Generator ──
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/YunaGuo0909/Text-to-Shot.git
 cd Text-to-Shot
-
-# Install dependencies with uv
 uv sync
+```
 
-# Run demo (no trained model needed)
+### Run Demo
+
+```bash
+# Generate trajectories with rule-based motion profiles (no trained model needed)
 uv run python generate_storyboard.py --demo
 ```
 
 ### Output
 
-The demo generates:
-- `outputs/demo_storyboard.png` — 6-panel storyboard with camera motion annotations
-- `outputs/demo_trajectory_dolly_in.png` — Detailed trajectory parameter curves
+The demo generates three visualizations:
+
+| Output File | Description |
+|---|---|
+| `outputs/demo_trajectory_storyboard.png` | 6-panel grid with per-shot trajectory curves |
+| `outputs/demo_trajectory_detail.png` | Detailed Toric parameter evolution for one shot |
+| `outputs/demo_camera_path.png` | Top-down camera path in Toric space |
 
 ---
 
@@ -58,28 +60,27 @@ The demo generates:
 ```
 Text-to-Shot/
 ├── configs/
-│   └── default.yaml              # Model, training & rendering configuration
+│   └── default.yaml                 # Model, training & trajectory configuration
 ├── src/
-│   ├── models/                   # Neural network modules
-│   │   ├── diffusion.py          # Gaussian diffusion process (DDPM)
-│   │   ├── denoiser.py           # Joint 3-branch denoiser network
-│   │   ├── film.py               # FiLM conditioning layer
-│   │   └── interaction.py        # Character-character & camera-character interaction
-│   ├── pipeline/                 # Generation pipeline modules
-│   │   ├── shot_decomposer.py    # LLM-based scene → shot decomposition
-│   │   ├── storyboard_generator.py  # Multi-shot generation with coherence
-│   │   ├── camera_trajectory.py  # Camera motion trajectory generation ★
-│   │   └── storyboard_renderer.py   # Visual storyboard rendering
+│   ├── models/                      # Neural network modules
+│   │   ├── diffusion.py             # Gaussian diffusion process (DDPM)
+│   │   ├── denoiser.py              # Temporal Transformer denoiser
+│   │   ├── film.py                  # FiLM conditioning layer
+│   │   └── interaction.py           # Temporal smoothing & inter-shot coherence
+│   ├── pipeline/                    # Generation pipeline
+│   │   ├── shot_decomposer.py       # LLM-based scene → shot decomposition
+│   │   ├── storyboard_generator.py  # Multi-shot trajectory generation pipeline
+│   │   ├── camera_trajectory.py     # Rule-based camera trajectory generation
+│   │   └── storyboard_renderer.py   # Trajectory visualization & rendering
 │   ├── data/
-│   │   └── dataset.py            # Dataset loading for training
+│   │   └── dataset.py               # Camera trajectory dataset loading
 │   └── utils/
-│       ├── toric.py              # Toric camera parameterization utilities
-│       └── smpl_utils.py         # SMPL body model & 6D rotation utilities
-├── train.py                      # Model training script
-├── generate_storyboard.py        # Storyboard generation entry point
-├── pyproject.toml                # Dependencies (uv)
-├── PROJECT_PLAN.md               # 10-week project timeline
-└── TECHNICAL_DESIGN.md           # Detailed technical design document
+│       ├── toric.py                 # Toric camera parameterization utilities
+│       └── smpl_utils.py            # Camera & rotation utility functions
+├── train.py                         # Model training script
+├── generate_storyboard.py           # Trajectory generation entry point
+├── pyproject.toml                   # Dependencies (uv)
+└── README.md
 ```
 
 ---
@@ -88,78 +89,103 @@ Text-to-Shot/
 
 ### Stage 1 — Shot Decomposition (`shot_decomposer.py`)
 
-Uses an LLM (GPT-4 / local model) to break a scene description into a structured shot list. Each shot specifies:
+Uses an LLM (GPT-4 / local model) to break a screenplay into a structured shot list. Each shot specifies:
+
 - **Shot type**: close-up, medium-shot, wide-shot, over-the-shoulder, two-shot
 - **Camera motion**: static, dolly-in, dolly-out, pan-left, pan-right, crane-up, crane-down, track, orbit
-- Character actions for both persons A and B
+- **Emotional tone**: tense, calm, dramatic, intimate, etc.
+- **Duration hint**: estimated shot length in seconds
 
-### Stage 2 — Joint Character-Camera Generation (`diffusion.py` + `denoiser.py`)
+### Stage 2 — Camera Trajectory Generation (Diffusion Model)
 
-A **Gaussian Diffusion Model** generates the 3D configuration for each shot:
+A **Gaussian Diffusion Model** generates smooth camera trajectories in Toric parameter space.
 
-**Data representation** — Each shot is a 306-dim vector `y = (x_A, x_B, x_C)`:
-- `x_A ∈ R^150`: Character A pose (22 joints × 6D rotation + placement vector)
-- `x_B ∈ R^150`: Character B pose (same structure)
-- `x_C ∈ R^6`: Camera state in **Toric space** (pA_x, pA_y, pB_x, pB_y, θ, φ)
+**Data representation** — Each trajectory is a sequence of T frames, each a 6-dim Toric state:
 
-**Network architecture** — `JointDenoiser` with three parallel branches:
-- Branch A (Character A), Branch B (Character B), Branch C (Camera)
-- Each branch: Linear → [MLP + FiLM conditioning + residual] × 4 → Linear
-- Three **pairwise interaction modules** exchange messages between entities:
-  - `I_HH`: Character A ↔ Character B (e.g., handshake coordination)
-  - `I_AC`: Character A ↔ Camera (e.g., framing follows action)
-  - `I_BC`: Character B ↔ Camera
+```
+x_C(t) = (pA_x, pA_y, pB_x, pB_y, θ, φ)  ∈ R^6    for t = 1, ..., T
+```
 
-**Conditioning** — The denoiser is conditioned on:
-- Text embedding (CLIP, 512-dim)
-- Diffusion timestep (sinusoidal, 128-dim)
-- Shot type embedding (learnable, 64-dim) ★ *extension*
+- `pA_x, pA_y`: Normalized screen position of reference point A
+- `pB_x, pB_y`: Normalized screen position of reference point B
+- `θ` (theta): Camera azimuth (yaw) in Toric space
+- `φ` (phi): Camera elevation (pitch) in Toric space
 
-### Stage 3 — Camera Trajectory Generation (`camera_trajectory.py`) ★ New
+The trajectory is flattened to a (T × 6)-dim vector for the diffusion process.
 
-Extends the static Toric camera state into a temporal motion trajectory:
+**Network architecture** — `CameraTrajectoryDenoiser`:
 
-1. **Motion profile**: Each motion type (dolly, pan, crane, etc.) defines delta changes to the 6 Toric parameters
-2. **Keyframe generation**: K keyframes are generated with easing functions (ease-in-out, quadratic)
-3. **Spline interpolation**: Cubic spline (C² continuous) interpolation produces smooth T-frame trajectories
-4. **Evaluation metrics**: Velocity, acceleration, jerk (smoothness) are computed per trajectory
+- Per-frame linear projection: Toric (6-dim) → hidden (256-dim)
+- Learnable temporal positional encoding
+- N Temporal Transformer blocks, each containing:
+  - Multi-head self-attention across time axis
+  - FiLM-conditioned feed-forward network
+- Per-frame linear projection: hidden → Toric (6-dim)
 
-### Stage 4 — Storyboard Rendering (`storyboard_renderer.py`)
+**Conditioning signals**:
 
-Renders all shots into a visual storyboard grid:
-- Stick figure characters (A = red, B = cyan) from SMPL joint positions
-- Camera motion arrows and path overlays (yellow)
-- Shot type labels, camera motion type badges, descriptive text
+| Signal | Method | Dimension |
+|--------|--------|-----------|
+| Text (scene description) | CLIP embedding | 512 |
+| Diffusion timestep | Sinusoidal + MLP | 128 |
+| Shot type | Learnable embedding | 64 |
+| Camera motion type | Learnable embedding | 64 |
+
+### Stage 3 — Visualization (`storyboard_renderer.py`)
+
+Renders trajectories as:
+
+1. **Multi-shot grid**: Each panel shows θ/φ curves and screen position evolution
+2. **Parameter detail view**: All 6 Toric parameters with keyframe markers
+3. **Top-down camera path**: θ vs φ plot showing spatial camera movement across shots
 
 ---
 
 ## Training
 
+### Data Preparation
+
+Training data is extracted from film shots on ShotDeck:
+
+1. **Scrape** film shot clips/frames from ShotDeck
+2. **Estimate camera parameters** for each frame using camera estimation methods
+3. **Extract Toric parameters**: Convert extrinsics to (pA_x, pA_y, pB_x, pB_y, θ, φ)
+4. **Annotate** with shot type, camera motion type, and text descriptions
+
+Expected data format (`data/train_index.json`):
+
+```json
+[
+  {
+    "id": "shot_001",
+    "text": "Medium shot, camera slowly dollies in toward two people at a table",
+    "shot_type": "medium-shot",
+    "camera_motion": "dolly-in",
+    "trajectory_path": "trajectories/shot_001.npy"
+  }
+]
+```
+
+Each `.npy` file contains a `(T, 6)` NumPy array of Toric camera states.
+
+### Run Training
+
 ```bash
-# Train the diffusion model
 uv run python train.py --config configs/default.yaml --device cuda
 ```
 
-**Training process:**
-
-1. Load dataset of `(text, character_A_pose, character_B_pose, camera_state)` tuples
-2. For each batch:
-   - Encode text with CLIP → `text_embed (B, 512)`
-   - Sample random timestep `t ~ Uniform(0, T)`
-   - Add noise: `y_t = √ᾱ_t · y_0 + √(1-ᾱ_t) · ε`
-   - Predict clean sample: `ŷ_0 = f_θ(y_t, t, text_embed, shot_type)`
-   - Compute loss: `L = MSE(ŷ_0, y_0)`
-3. Backpropagate with AdamW optimizer + gradient clipping
-4. Save checkpoints every N epochs
-
-**Key hyperparameters** (see `configs/default.yaml`):
+### Key Hyperparameters
 
 | Parameter | Value |
 |-----------|-------|
+| Trajectory frames (T) | 48 (2s @ 24fps) |
+| Toric dimension | 6 |
+| Total diffusion dim | 288 (48 × 6) |
 | Diffusion timesteps | 1000 |
 | Beta schedule | Cosine |
-| Hidden dim | 512 |
-| Transformer layers | 4 × 3 branches |
+| Hidden dim | 256 |
+| Transformer layers | 6 |
+| Attention heads | 4 |
 | Batch size | 64 |
 | Learning rate | 1e-4 |
 | Epochs | 500 |
@@ -168,8 +194,8 @@ uv run python train.py --config configs/default.yaml --device cuda
 
 ## Camera Motion Types
 
-| Type | Description | Toric Parameter Change |
-|------|-------------|----------------------|
+| Type | Description | Primary Toric Change |
+|------|-------------|---------------------|
 | `static` | Fixed camera | No change |
 | `dolly-in` | Push toward subjects | pA, pB spread outward |
 | `dolly-out` | Pull away from subjects | pA, pB move inward |
@@ -189,3 +215,4 @@ uv run python train.py --config configs/default.yaml --device cuda
 - FiLM conditioning: Perez et al. (2018)
 - 6D rotation: Zhou et al. (2019), CVPR
 - DanceCamera3D: Wang et al. (2024), AAAI
+- MDM (Human Motion Diffusion): Tevet et al. (2022), ICLR

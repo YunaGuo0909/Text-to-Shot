@@ -1,197 +1,168 @@
 """
-Storyboard Generator Module.
+Camera Trajectory Generation Pipeline.
 
 Orchestrates the full pipeline from scene description to multi-shot
-storyboard generation. Handles sequential shot generation with 
-inter-shot coherence constraints.
+camera trajectory generation. Handles sequential shot generation with
+inter-shot transition smoothing.
 """
 
 import torch
-import torch.nn as nn
 import numpy as np
 from typing import List, Optional
 from dataclasses import dataclass, field
 
-from .shot_decomposer import ShotConfig, StoryboardPlan, SHOT_TYPE_MAP
+from .shot_decomposer import ShotConfig, StoryboardPlan, SHOT_TYPE_MAP, CAMERA_MOTION_MAP
 from .camera_trajectory import CameraTrajectory, CameraTrajectoryGenerator
 
 
 @dataclass
 class GeneratedShot:
-    """A generated shot with 3D character poses, camera configuration, and motion trajectory."""
+    """A generated shot with camera trajectory."""
     shot_config: ShotConfig
-    char_a_pose: torch.Tensor           # (150,) SMPL pose vector
-    char_b_pose: torch.Tensor           # (150,) SMPL pose vector
-    camera_state: torch.Tensor          # (6,) Toric camera parameters (static start pose)
-    camera_trajectory: Optional[CameraTrajectory] = None  # 🆕 Camera motion trajectory
-    
+    camera_trajectory: CameraTrajectory  # Generated camera motion trajectory
+    toric_start: np.ndarray = None       # (6,) starting Toric state
+    toric_end: np.ndarray = None         # (6,) ending Toric state
+
 
 @dataclass
 class GeneratedStoryboard:
-    """Complete generated storyboard with all shots."""
+    """Complete generated sequence with all shots."""
     plan: StoryboardPlan
     shots: List[GeneratedShot]
 
 
-class StoryboardGenerator:
+class TrajectoryPipeline:
     """
-    Generates a multi-shot storyboard from a StoryboardPlan.
-    
-    Uses the joint character-camera diffusion model to generate each shot,
-    with optional inter-shot coherence constraints to maintain spatial
-    continuity across the storyboard.
+    Generates multi-shot camera trajectories from a StoryboardPlan.
+
+    Uses the camera trajectory diffusion model to generate each shot's
+    trajectory, with optional inter-shot smoothing to maintain spatial
+    continuity across cuts.
     """
 
-    def __init__(self, diffusion_model, text_encoder, device='cuda'):
+    def __init__(self, diffusion_model=None, text_encoder=None, device='cuda'):
         """
         Args:
-            diffusion_model: Trained GaussianDiffusion model
+            diffusion_model: Trained GaussianDiffusion model (None for rule-based mode)
             text_encoder: Text encoder (CLIP) for conditioning
             device: Computation device
         """
         self.diffusion_model = diffusion_model
         self.text_encoder = text_encoder
         self.device = device
-        self.char_pose_dim = diffusion_model.denoiser.char_pose_dim
+        self.rule_based_generator = CameraTrajectoryGenerator(default_num_frames=48)
 
     @torch.no_grad()
     def generate(
         self,
         plan: StoryboardPlan,
-        coherence_weight: float = 0.3,
-        use_coherence: bool = True,
+        mode: str = "rule_based",
+        smooth_transitions: bool = True,
     ) -> GeneratedStoryboard:
         """
-        Generate all shots in a storyboard plan.
-        
+        Generate camera trajectories for all shots.
+
         Args:
             plan: StoryboardPlan from ShotDecomposer
-            coherence_weight: Weight for inter-shot coherence guidance
-            use_coherence: Whether to apply coherence constraints
-            
+            mode: "diffusion" (learned model) or "rule_based" (motion profiles)
+            smooth_transitions: Whether to smooth inter-shot transitions
+
         Returns:
-            GeneratedStoryboard with all generated shots
+            GeneratedStoryboard with all generated trajectories
         """
         generated_shots = []
         prev_shot = None
 
         for shot_config in plan.shots:
-            # Encode text description
-            text_embed = self._encode_text(shot_config.description)
-            
-            # Get shot type index
-            shot_type_idx = SHOT_TYPE_MAP.get(shot_config.shot_type, 1)
-            shot_type = torch.tensor([shot_type_idx], device=self.device)
-
-            # Generate shot
-            if use_coherence and prev_shot is not None:
-                generated = self._generate_with_coherence(
-                    text_embed, shot_type, prev_shot, coherence_weight
-                )
+            if mode == "diffusion" and self.diffusion_model is not None:
+                trajectory = self._generate_diffusion(shot_config, prev_shot)
             else:
-                generated = self._generate_single(text_embed, shot_type)
+                trajectory = self._generate_rule_based(shot_config, prev_shot)
 
-            # Parse output
-            char_a_pose = generated[:, :self.char_pose_dim].squeeze(0)
-            char_b_pose = generated[:, self.char_pose_dim:self.char_pose_dim * 2].squeeze(0)
-            camera_state = generated[:, self.char_pose_dim * 2:].squeeze(0)
+            # Smooth transition from previous shot
+            if smooth_transitions and prev_shot is not None:
+                trajectory = self._smooth_transition(prev_shot, trajectory)
 
             shot = GeneratedShot(
                 shot_config=shot_config,
-                char_a_pose=char_a_pose,
-                char_b_pose=char_b_pose,
-                camera_state=camera_state,
+                camera_trajectory=trajectory,
+                toric_start=trajectory.trajectory[0].copy(),
+                toric_end=trajectory.trajectory[-1].copy(),
             )
             generated_shots.append(shot)
             prev_shot = shot
 
         return GeneratedStoryboard(plan=plan, shots=generated_shots)
 
-    def _encode_text(self, text: str) -> torch.Tensor:
-        """Encode text description using CLIP text encoder."""
-        # Placeholder - will be replaced with actual CLIP encoding
-        # text_embed shape: (1, text_dim)
-        tokens = self.text_encoder.tokenize([text])
-        tokens = {k: v.to(self.device) for k, v in tokens.items()}
-        text_embed = self.text_encoder.encode(tokens)
-        return text_embed
+    def _generate_diffusion(self, shot_config: ShotConfig, prev_shot: Optional[GeneratedShot]):
+        """Generate trajectory using the trained diffusion model."""
+        text_embed = self._encode_text(shot_config.description)
 
-    def _generate_single(self, text_embed, shot_type):
-        """Generate a single shot without coherence constraints."""
-        return self.diffusion_model.sample(
+        shot_type_idx = SHOT_TYPE_MAP.get(shot_config.shot_type, 1)
+        shot_type = torch.tensor([shot_type_idx], device=self.device)
+
+        motion_idx = CAMERA_MOTION_MAP.get(shot_config.camera_motion, 0)
+        motion_type = torch.tensor([motion_idx], device=self.device)
+
+        # Generate via diffusion
+        y_0 = self.diffusion_model.sample(
             text_embed=text_embed,
             shot_type=shot_type,
+            motion_type=motion_type,
             device=self.device,
         )
 
-    def _generate_with_coherence(
-        self,
-        text_embed: torch.Tensor,
-        shot_type: torch.Tensor,
-        prev_shot: GeneratedShot,
-        coherence_weight: float,
-    ) -> torch.Tensor:
+        # Reshape to trajectory
+        toric_dim = self.diffusion_model.denoiser.toric_dim
+        num_frames = self.diffusion_model.denoiser.num_frames
+        traj_data = y_0.squeeze(0).cpu().numpy().reshape(num_frames, toric_dim)
+
+        return CameraTrajectory(
+            motion_type=shot_config.camera_motion,
+            num_frames=num_frames,
+            keyframes=traj_data[np.linspace(0, num_frames - 1, 4, dtype=int)],
+            trajectory=traj_data,
+            timestamps=np.linspace(0, 1, num_frames),
+        )
+
+    def _generate_rule_based(self, shot_config: ShotConfig, prev_shot: Optional[GeneratedShot]):
+        """Generate trajectory using rule-based motion profiles."""
+        if prev_shot is not None:
+            start_state = prev_shot.toric_end
+        else:
+            start_state = np.array([0.3, 0.4, 0.7, 0.4, 0.0, 0.1])
+
+        num_frames = int(shot_config.duration_hint * 24)  # 24 fps
+        return self.rule_based_generator.generate(
+            start_state=start_state,
+            motion_type=shot_config.camera_motion,
+            num_frames=max(num_frames, 12),
+            intensity=1.0,
+        )
+
+    def _smooth_transition(self, prev_shot: GeneratedShot, curr_trajectory: CameraTrajectory):
         """
-        Generate a shot with inter-shot coherence guidance.
-        
-        Applies soft constraints during the reverse diffusion process
-        to maintain spatial continuity with the previous shot:
-        1. Character positions should be roughly consistent
-        2. Camera should respect the 180-degree rule
-        
-        Args:
-            text_embed: Text conditioning
-            shot_type: Shot type index
-            prev_shot: Previously generated shot
-            coherence_weight: Strength of coherence guidance
-            
-        Returns:
-            Generated shot configuration tensor
+        Smooth the transition between two consecutive shots.
+
+        Blends the first few frames of the current trajectory toward
+        the end state of the previous shot for continuity.
         """
-        batch_size = text_embed.shape[0]
-        total_dim = self.diffusion_model.denoiser.total_dim
-        model = self.diffusion_model
+        blend_frames = min(6, curr_trajectory.num_frames // 4)
+        prev_end = prev_shot.toric_end
 
-        # Start from noise
-        y_t = torch.randn(batch_size, total_dim, device=self.device)
-
-        # Previous shot reference for coherence
-        prev_char_a = prev_shot.char_a_pose.unsqueeze(0)
-        prev_char_b = prev_shot.char_b_pose.unsqueeze(0)
-
-        for t in reversed(range(model.num_timesteps)):
-            t_batch = torch.full((batch_size,), t, device=self.device, dtype=torch.long)
-            
-            # Standard denoising step
-            y_0_pred = model.denoiser(y_t, t_batch, text_embed, shot_type=shot_type)
-
-            # Apply coherence guidance on the prediction
-            if t > model.num_timesteps * 0.3:  # Only in early (noisy) steps
-                # Extract predicted character global positions (last 12 dims = placement vector)
-                pred_a_pos = y_0_pred[:, self.char_pose_dim - 12:self.char_pose_dim]
-                pred_b_pos = y_0_pred[:, self.char_pose_dim * 2 - 12:self.char_pose_dim * 2]
-                prev_a_pos = prev_char_a[:, -12:]
-                prev_b_pos = prev_char_b[:, -12:]
-
-                # Soft position coherence
-                pos_diff_a = coherence_weight * (prev_a_pos - pred_a_pos)
-                pos_diff_b = coherence_weight * (prev_b_pos - pred_b_pos)
-
-                # Apply correction to placement vectors
-                y_0_pred[:, self.char_pose_dim - 12:self.char_pose_dim] += pos_diff_a
-                y_0_pred[:, self.char_pose_dim * 2 - 12:self.char_pose_dim * 2] += pos_diff_b
-
-            # Compute posterior mean and sample
-            posterior_mean = (
-                model.posterior_mean_coef1[t_batch].unsqueeze(-1) * y_0_pred +
-                model.posterior_mean_coef2[t_batch].unsqueeze(-1) * y_t
+        for i in range(blend_frames):
+            alpha = i / blend_frames  # 0 → 1
+            curr_trajectory.trajectory[i] = (
+                (1 - alpha) * prev_end + alpha * curr_trajectory.trajectory[i]
             )
 
-            if t > 0:
-                noise = torch.randn_like(y_t)
-                posterior_var = model.betas[t_batch].unsqueeze(-1)
-                y_t = posterior_mean + torch.sqrt(posterior_var) * noise
-            else:
-                y_t = posterior_mean
+        return curr_trajectory
 
-        return y_t
+    def _encode_text(self, text: str) -> torch.Tensor:
+        """Encode text using CLIP text encoder."""
+        if self.text_encoder is not None:
+            tokens = self.text_encoder.tokenize([text])
+            tokens = {k: v.to(self.device) for k, v in tokens.items()}
+            return self.text_encoder.encode(tokens)
+        else:
+            return torch.randn(1, 512, device=self.device)

@@ -1,23 +1,19 @@
 # ============================================================
-# AI-Driven Storyboard Generation - Default Configuration
+# Script-to-Camera: Camera Trajectory Generation — Configuration
 # ============================================================
 
 # --- Model Architecture ---
 model:
-  # Character pose dimensions (25 joints × 6D rotation = 150)
-  char_pose_dim: 150
-  # Camera state dimensions (Toric: pA_x, pA_y, pB_x, pB_y, theta, phi)
-  camera_dim: 6
-  # Hidden dimension for transformer branches
-  hidden_dim: 512
-  # Number of transformer layers per branch
-  num_layers: 4
+  # Toric camera state dimension (pA_x, pA_y, pB_x, pB_y, theta, phi)
+  toric_dim: 6
+  # Hidden dimension for Transformer
+  hidden_dim: 256
+  # Number of Transformer layers
+  num_layers: 6
   # Number of attention heads
-  num_heads: 8
+  num_heads: 4
   # Dropout rate
   dropout: 0.1
-  # FiLM conditioning dimension
-  film_dim: 256
 
 # --- Diffusion Settings ---
 diffusion:
@@ -48,6 +44,28 @@ shot_types:
     - "two-shot"
   embedding_dim: 64
 
+# --- Camera Trajectory ---
+trajectory:
+  # Default trajectory length in frames (at 24fps → 2 seconds)
+  default_num_frames: 48
+  # Available camera motion types
+  motion_types:
+    - "static"
+    - "dolly-in"
+    - "dolly-out"
+    - "pan-left"
+    - "pan-right"
+    - "crane-up"
+    - "crane-down"
+    - "track"
+    - "orbit"
+  # Motion type embedding dimension
+  motion_type_dim: 64
+  # Interpolation method: cubic-spline
+  interpolation: cubic-spline
+  # Default motion intensity (1.0 = normal)
+  default_intensity: 1.0
+
 # --- Training ---
 training:
   batch_size: 64
@@ -62,49 +80,20 @@ training:
 
 # --- Data ---
 data:
-  dataset_name: "interhuman"
+  dataset_name: "shotdeck-camera"
   data_root: "./data"
   num_workers: 4
   pin_memory: true
 
-# --- Camera Trajectory ---
-trajectory:
-  # Default trajectory length in frames (at 24fps)
-  default_num_frames: 48
-  # Available motion types
-  motion_types:
-    - "static"
-    - "dolly-in"
-    - "dolly-out"
-    - "pan-left"
-    - "pan-right"
-    - "crane-up"
-    - "crane-down"
-    - "track"
-    - "orbit"
-  # Interpolation method: catmull-rom, cubic-spline
-  interpolation: cubic-spline
-  # Default intensity (1.0 = normal, 0.5 = subtle, 2.0 = dramatic)
-  default_intensity: 1.0
-
-# --- Storyboard Rendering ---
+# --- Rendering / Visualization ---
 rendering:
-  # Panel resolution
-  panel_width: 640
-  panel_height: 360
-  # Grid layout
-  grid_cols: 3
-  # Stick figure style
-  line_width: 2
-  joint_radius: 4
-  # Colors
-  char_a_color: "#FF6B6B"
-  char_b_color: "#4ECDC4"
-  trajectory_color: "#FFE66D"
-  camera_color: "#FFE66D"
+  # Trajectory plot colors
+  theta_color: "#FFE66D"
+  phi_color: "#FF6B6B"
+  screen_pos_color: "#4ECDC4"
   background_color: "#2C3E50"
-  # Show trajectory overlay on panels
-  show_trajectory: true
+  # Grid layout for multi-shot view
+  grid_cols: 3
 
 # --- Paths ---
 paths:

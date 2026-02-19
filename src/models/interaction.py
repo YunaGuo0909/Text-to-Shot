@@ -1,15 +1,13 @@
 """
-Pairwise Interaction Modules for Joint Character-Camera Generation.
+Temporal Interaction Modules for Camera Trajectory Generation.
 
-Implements three types of interaction:
-1. Character-Character (I_HH): Captures coordination between two people
-2. Camera-Character (I_CH): Couples camera framing with character poses
+Provides auxiliary modules for modeling temporal dependencies in
+camera trajectories. These can be composed with the main denoiser
+for enhanced trajectory coherence.
 
-These modules exchange residual messages between entity pairs (A↔B, A↔C, B↔C)
-to capture mutual dependencies under textual guidance.
-
-Reference:
-- "From Script to Shot" (SIGGRAPH 2026) Section 3.4
+Note: The primary temporal modeling is handled by the Transformer
+self-attention in CameraTrajectoryDenoiser. This module provides
+optional inter-shot coherence mechanisms.
 """
 
 import torch
@@ -17,98 +15,84 @@ import torch.nn as nn
 from .film import FiLMLayer
 
 
-class InteractionModule(nn.Module):
+class TemporalSmoothingModule(nn.Module):
     """
-    Directed residual interaction module between two entities.
-    
-    Given source and target embeddings, produces a directed residual 
-    update that refines the target representation. FiLM modulation 
-    enables text-dependent interaction behavior.
+    Learnable temporal smoothing module.
+
+    Applies a 1D convolution along the time axis to encourage
+    smooth camera transitions, followed by FiLM conditioning.
     """
 
-    def __init__(self, embed_dim, condition_dim):
-        """
-        Args:
-            embed_dim: Dimension of entity embeddings
-            condition_dim: Dimension of text conditioning
-        """
+    def __init__(self, hidden_dim, condition_dim, kernel_size=5):
         super().__init__()
-        self.mlp1 = nn.Linear(embed_dim * 2, embed_dim)
-        self.film = FiLMLayer(embed_dim, condition_dim)
-        self.mlp2 = nn.Linear(embed_dim, embed_dim)
+        padding = kernel_size // 2
+        self.temporal_conv = nn.Conv1d(
+            hidden_dim, hidden_dim,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=1,
+        )
+        self.film = FiLMLayer(hidden_dim, condition_dim)
         self.activation = nn.SiLU()
+        self.norm = nn.LayerNorm(hidden_dim)
 
-    def forward(self, h_source, h_target, condition):
+    def forward(self, x, condition):
         """
-        Compute directed residual update from source to target.
-        
         Args:
-            h_source: Source entity embedding (batch_size, embed_dim)
-            h_target: Target entity embedding (batch_size, embed_dim)
-            condition: Text conditioning (batch_size, condition_dim)
-            
+            x: (batch, T, hidden_dim) temporal features
+            condition: (batch, condition_dim) conditioning
+
         Returns:
-            delta_h: Residual update for target (batch_size, embed_dim)
+            (batch, T, hidden_dim) smoothed features
         """
-        # Concatenate source and target
-        h_concat = torch.cat([h_source, h_target], dim=-1)
-        h = self.activation(self.mlp1(h_concat))
-        h = self.film(h, condition)
-        delta_h = self.mlp2(h)
-        return delta_h
+        B, T, D = x.shape
+        residual = x
+
+        # Conv1d expects (B, C, T)
+        h = x.permute(0, 2, 1)
+        h = self.temporal_conv(h)
+        h = h.permute(0, 2, 1)  # back to (B, T, D)
+
+        h = self.activation(h)
+        h = h.reshape(B * T, D)
+        cond_expanded = condition.unsqueeze(1).expand(-1, T, -1).reshape(B * T, -1)
+        h = self.film(h, cond_expanded)
+        h = h.reshape(B, T, D)
+
+        return self.norm(residual + h)
 
 
-class CharacterCharacterInteraction(nn.Module):
+class InterShotCoherenceModule(nn.Module):
     """
-    Bidirectional character-character interaction module (I_HH).
-    
-    Captures coordination and spatial relations between two characters
-    by predicting bidirectional residuals.
+    Ensures smooth camera transitions between consecutive shots.
+
+    Takes the ending state of the previous shot's trajectory and
+    produces a bias that guides the beginning of the next shot.
     """
 
-    def __init__(self, embed_dim, condition_dim):
+    def __init__(self, toric_dim=6, hidden_dim=128):
         super().__init__()
-        self.interaction = InteractionModule(embed_dim, condition_dim)
+        self.encoder = nn.Sequential(
+            nn.Linear(toric_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.transition_gate = nn.Sequential(
+            nn.Linear(hidden_dim, toric_dim),
+            nn.Tanh(),
+        )
 
-    def forward(self, h_A, h_B, condition):
+    def forward(self, prev_end_state, next_start_state):
         """
+        Compute a correction to smooth the shot transition.
+
         Args:
-            h_A: Character A embedding
-            h_B: Character B embedding
-            condition: Text conditioning
-            
+            prev_end_state: (batch, toric_dim) end of previous trajectory
+            next_start_state: (batch, toric_dim) start of next trajectory
+
         Returns:
-            delta_A: Residual update for A (from B)
-            delta_B: Residual update for B (from A)
+            correction: (batch, toric_dim) additive correction for next start
         """
-        delta_A_to_B = self.interaction(h_A, h_B, condition)
-        delta_B_to_A = self.interaction(h_B, h_A, condition)
-        return delta_B_to_A, delta_A_to_B
-
-
-class CameraCharacterInteraction(nn.Module):
-    """
-    Bidirectional camera-character interaction module (I_CH).
-    
-    Couples camera framing with character configurations by computing
-    residuals in both directions.
-    """
-
-    def __init__(self, embed_dim, condition_dim):
-        super().__init__()
-        self.interaction = InteractionModule(embed_dim, condition_dim)
-
-    def forward(self, h_char, h_cam, condition):
-        """
-        Args:
-            h_char: Character embedding
-            h_cam: Camera embedding
-            condition: Text conditioning
-            
-        Returns:
-            delta_char: Residual update for character (from camera)
-            delta_cam: Residual update for camera (from character)
-        """
-        delta_char_to_cam = self.interaction(h_char, h_cam, condition)
-        delta_cam_to_char = self.interaction(h_cam, h_char, condition)
-        return delta_cam_to_char, delta_char_to_cam
+        h = self.encoder(prev_end_state)
+        correction = self.transition_gate(h)
+        return correction
