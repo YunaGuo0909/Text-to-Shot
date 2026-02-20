@@ -64,7 +64,7 @@ class CameraTrajectoryDataset(Dataset):
         """Load dataset index file."""
         index_path = os.path.join(self.data_root, f'{self.split}_index.json')
         if os.path.exists(index_path):
-            with open(index_path, 'r') as f:
+            with open(index_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         else:
             print(f"Warning: Index file not found at {index_path}")

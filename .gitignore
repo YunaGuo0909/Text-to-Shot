@@ -28,6 +28,8 @@ uv.lock
 .ipynb_checkpoints/
 
 # Data & Models (too large for git)
+data/et-data/
+data/trajectories/
 data/raw/
 data/processed/
 checkpoints/
@@ -36,9 +38,7 @@ pretrained/
 *.pt
 *.ckpt
 *.h5
-
-# SMPL model files
-body_models/
+*.npy
 
 # Results (large files)
 outputs/
@@ -62,5 +62,4 @@ desktop.ini
 *.bak
 paper_text.txt
 extract_pdf.py
-
 *.pdf
