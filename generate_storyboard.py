@@ -200,6 +200,15 @@ def inference_single(args):
 
     print(f"\nOutputs saved to: {base_path}_*.png")
 
+    # 3D animation
+    from visualize_3d import create_trajectory_animation, create_static_3d_view
+    traj_data = trajectories[0].trajectory
+    anim_title = f"{args.motion} | \"{args.scene[:50]}\""
+    create_trajectory_animation(traj_data, title=anim_title,
+                                save_path=f"{base_path}_3d.gif")
+    create_static_3d_view(traj_data, title=anim_title,
+                          save_path=f"{base_path}_3d_static.png")
+
 
 def demo_with_mock_data():
     """Demo trajectory generation with rule-based motion profiles."""

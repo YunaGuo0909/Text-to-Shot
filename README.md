@@ -9,15 +9,15 @@
 This project proposes a diffusion-based framework that automatically generates cinematic camera motion trajectories from textual scene descriptions. Given a screenplay excerpt, the system:
 
 1. **Decomposes** the scene into a sequence of cinematic shots (via LLM)
-2. **Generates** smooth camera motion trajectories in Toric parameter space (via diffusion model)
-3. **Visualizes** the trajectories as parameter curves, camera path diagrams, and multi-shot grids
+2. **Generates** smooth camera motion trajectories via a text-conditioned diffusion model
+3. **Visualizes** the trajectories as 3D animations, parameter curves, and camera path diagrams
 
 ```
-Screenplay ──▶ Shot Decomposer ──▶ Trajectory Diffusion Model ──▶ Trajectory Visualizer
-  (text)          (LLM-based)         (Toric space DDPM)           (curves + paths)
+Screenplay ──▶ Shot Decomposer ──▶ Trajectory Diffusion Model ──▶ 3D Trajectory Visualizer
+  (text)          (LLM-based)       (CLIP + DDPM denoiser)        (GIF + curves + 3D paths)
 ```
 
-Training data is constructed by extracting camera parameters from real film shots sourced from **ShotDeck**, bridging computational cinematography and generative AI.
+Training data is sourced from the [E.T. (Exceptional Trajectories)](https://github.com/Wangt-CN/E.T.) dataset, which provides real film camera trajectories paired with textual descriptions.
 
 ---
 
@@ -26,7 +26,7 @@ Training data is constructed by extracting camera parameters from real film shot
 ### Prerequisites
 
 - Python ≥ 3.10
-- [uv](https://docs.astral.sh/uv/) package manager
+- [uv](https://docs.astral.sh/uv/) package manager (or pip)
 
 ### Installation
 
@@ -36,22 +36,29 @@ cd Text-to-Shot
 uv sync
 ```
 
-### Run Demo
+### Run Demo (no trained model needed)
 
 ```bash
-# Generate trajectories with rule-based motion profiles (no trained model needed)
-uv run python generate_storyboard.py --demo
+# 2D parameter curves + multi-shot grid
+PYTHONPATH=. python generate_storyboard.py --demo
+
+# 3D camera trajectory animation (GIF)
+PYTHONPATH=. python visualize_3d.py --demo --motion orbit
+
+# All 9 motion types comparison
+PYTHONPATH=. python visualize_3d.py --compare-motions
 ```
 
-### Output
+### Demo Outputs
 
-The demo generates three visualizations:
-
-| Output File | Description |
+| Output | Description |
 |---|---|
 | `outputs/demo_trajectory_storyboard.png` | 6-panel grid with per-shot trajectory curves |
-| `outputs/demo_trajectory_detail.png` | Detailed Toric parameter evolution for one shot |
-| `outputs/demo_camera_path.png` | Top-down camera path in Toric space |
+| `outputs/demo_trajectory_detail.png` | Detailed parameter evolution for one shot |
+| `outputs/demo_camera_path.png` | Top-down camera path |
+| `outputs/test_orbit.gif` | 3D animated camera trajectory (GIF) |
+| `outputs/test_orbit_static.png` | 3D static view with camera frustums |
+| `outputs/all_motions_comparison.png` | 9 motion types side-by-side comparison |
 
 ---
 
@@ -65,26 +72,27 @@ Text-to-Shot/
 │   ├── models/                      # Neural network modules
 │   │   ├── diffusion.py             # Gaussian diffusion process (DDPM)
 │   │   ├── denoiser.py              # Temporal Transformer denoiser
-│   │   ├── text_encoder.py          # CLIP text encoder wrapper
+│   │   ├── text_encoder.py          # Frozen CLIP text encoder wrapper
 │   │   ├── film.py                  # FiLM conditioning layer
 │   │   └── interaction.py           # Temporal smoothing & inter-shot coherence
 │   ├── pipeline/                    # Generation pipeline
 │   │   ├── shot_decomposer.py       # LLM-based scene → shot decomposition
 │   │   ├── storyboard_generator.py  # Multi-shot trajectory generation pipeline
 │   │   ├── camera_trajectory.py     # Rule-based camera trajectory generation
-│   │   └── storyboard_renderer.py   # Trajectory visualization & rendering
+│   │   └── storyboard_renderer.py   # 2D trajectory visualization & rendering
 │   ├── data/
-│   │   └── dataset.py               # Camera trajectory dataset loading
+│   │   └── dataset.py               # Camera trajectory dataset & dataloader
 │   └── utils/
 │       ├── toric.py                 # Toric camera parameterization utilities
 │       └── smpl_utils.py            # Camera & rotation utility functions
 ├── scripts/
-│   ├── preprocess_et_data.py        # E.T. dataset preprocessing
-│   └── verify_data.py               # Data verification script
-├── train.py                         # Model training script (CLIP integrated)
-├── generate_storyboard.py           # Inference & demo entry point
-├── evaluate.py                      # Quantitative evaluation script
-├── pyproject.toml                   # Dependencies (uv)
+│   ├── preprocess_et_data.py        # E.T. dataset → training data preprocessing
+│   └── verify_data.py               # Data & model forward pass verification
+├── train.py                         # Training script (CLIP text conditioning)
+├── generate_storyboard.py           # Inference: text → trajectory + visualization
+├── evaluate.py                      # Quantitative evaluation on test set
+├── visualize_3d.py                  # 3D camera trajectory animation (GIF/PNG)
+├── pyproject.toml                   # Dependencies
 └── README.md
 ```
 
@@ -103,114 +111,107 @@ Uses an LLM (GPT-4 / local model) to break a screenplay into a structured shot l
 
 ### Stage 2 — Camera Trajectory Generation (Diffusion Model)
 
-A **Gaussian Diffusion Model** generates smooth camera trajectories in Toric parameter space.
+A **Gaussian Diffusion Model (DDPM)** generates smooth camera trajectories conditioned on text, shot type, and camera motion type.
 
-**Data representation** — Each trajectory is a sequence of T frames, each a 6-dim Toric state:
+**Data representation** — Each trajectory is a sequence of T frames, each a 6D camera state:
 
 ```
-x_C(t) = (pA_x, pA_y, pB_x, pB_y, θ, φ)  ∈ R^6    for t = 1, ..., T
+x_C(t) = (tx, ty, tz, azimuth, elevation, roll)  ∈ R^6    for t = 1, ..., T
 ```
 
-- `pA_x, pA_y`: Normalized screen position of reference point A
-- `pB_x, pB_y`: Normalized screen position of reference point B
-- `θ` (theta): Camera azimuth (yaw) in Toric space
-- `φ` (phi): Camera elevation (pitch) in Toric space
+- `tx, ty, tz`: Camera position in world coordinates
+- `azimuth` (θ): Yaw rotation (left-right)
+- `elevation` (φ): Pitch rotation (up-down)
+- `roll` (ψ): Dutch angle rotation
 
 The trajectory is flattened to a (T × 6)-dim vector for the diffusion process.
 
 **Network architecture** — `CameraTrajectoryDenoiser`:
 
-- Per-frame linear projection: Toric (6-dim) → hidden (256-dim)
+- Per-frame linear projection: 6D → hidden (256-dim)
 - Learnable temporal positional encoding
 - N Temporal Transformer blocks, each containing:
   - Multi-head self-attention across time axis
   - FiLM-conditioned feed-forward network
-- Per-frame linear projection: hidden → Toric (6-dim)
+- Per-frame linear projection: hidden → 6D
 
 **Conditioning signals**:
 
 | Signal | Method | Dimension |
 |--------|--------|-----------|
-| Text (scene description) | CLIP embedding | 512 |
+| Text (scene description) | Frozen CLIP encoder | 512 |
 | Diffusion timestep | Sinusoidal + MLP | 128 |
 | Shot type | Learnable embedding | 64 |
 | Camera motion type | Learnable embedding | 64 |
 
-### Stage 3 — Visualization (`storyboard_renderer.py`)
+### Stage 3 — Visualization
 
-Renders trajectories as:
+**2D Visualization** (`storyboard_renderer.py`):
+1. Multi-shot grid with per-shot parameter curves
+2. Detailed 6-parameter evolution view
+3. Top-down camera path (θ vs φ)
 
-1. **Multi-shot grid**: Each panel shows θ/φ curves and screen position evolution
-2. **Parameter detail view**: All 6 Toric parameters with keyframe markers
-3. **Top-down camera path**: θ vs φ plot showing spatial camera movement across shots
+**3D Visualization** (`visualize_3d.py`):
+1. Animated GIF: camera moves through 3D space with frustum, trail, and real-time parameter display
+2. Static 3D view: camera path with frustums at keyframes (for paper figures)
+3. Motion type comparison: 9 motion types in a single figure
+
+---
+
+## Training Data
+
+Training data is derived from the **E.T. (Exceptional Trajectories)** dataset:
+
+| Component | Source | Usage |
+|---|---|---|
+| Camera trajectories | `traj/*.txt` (3×4 extrinsic matrices) | Converted to 6D camera state |
+| Text descriptions | `caption_cam/*.txt` | CLIP text conditioning |
+| Train/test split | `full_train_split.txt` / `full_test_split.txt` | Official E.T. splits |
+
+**Preprocessing** (`scripts/preprocess_et_data.py`):
+1. Parse 3×4 extrinsic matrices → extract rotation (Euler angles) and translation
+2. Convert to 6D state: `(tx, ty, tz, azimuth, elevation, roll)`
+3. Resample all trajectories to 48 frames (2s @ 24fps)
+4. Auto-classify camera motion type from text via keyword matching
+5. Output: `train_index.json` (103k samples) + `test_index.json` (11k samples) + `.npy` files
+
+**Data format** (`data/train_index.json`):
+
+```json
+[
+  {
+    "id": "2015_YmoTJu2iOfc_00039_00000",
+    "text": "The camera pushes in slowly toward the subject...",
+    "shot_type": "medium-shot",
+    "camera_motion": "dolly-in",
+    "trajectory_path": "trajectories/2015_YmoTJu2iOfc_00039_00000.npy"
+  }
+]
+```
+
+Each `.npy` file contains a `(48, 6)` float32 NumPy array.
 
 ---
 
 ## Training
 
-### Data Preparation
-
-Training data is extracted from film shots on ShotDeck:
-
-1. **Scrape** film shot clips/frames from ShotDeck
-2. **Estimate camera parameters** for each frame using camera estimation methods
-3. **Extract Toric parameters**: Convert extrinsics to (pA_x, pA_y, pB_x, pB_y, θ, φ)
-4. **Annotate** with shot type, camera motion type, and text descriptions
-
-Expected data format (`data/train_index.json`):
-
-```json
-[
-  {
-    "id": "shot_001",
-    "text": "Medium shot, camera slowly dollies in toward two people at a table",
-    "shot_type": "medium-shot",
-    "camera_motion": "dolly-in",
-    "trajectory_path": "trajectories/shot_001.npy"
-  }
-]
-```
-
-Each `.npy` file contains a `(T, 6)` NumPy array of Toric camera states.
-
-### Run Training
-
 ```bash
-# With CLIP text conditioning (requires transformers library)
+# With CLIP text conditioning
 PYTHONPATH=. python train.py --config configs/default.yaml --device cuda
 
-# Without CLIP (random text embeddings, for quick testing)
+# Without CLIP (random embeddings, for quick testing)
 PYTHONPATH=. python train.py --config configs/default.yaml --device cuda --no-clip
+
+# Resume from checkpoint
+PYTHONPATH=. python train.py --config configs/default.yaml --device cuda --resume checkpoints/checkpoint_epoch50.pth
 ```
-
-### Inference (after training)
-
-```bash
-# Generate trajectory from text description
-PYTHONPATH=. python generate_storyboard.py \
-  --scene "Camera slowly dollies in toward two people at a table" \
-  --checkpoint checkpoints/checkpoint_final.pth \
-  --motion dolly-in \
-  --shot-type medium-shot
-
-# Rule-based demo (no trained model needed)
-PYTHONPATH=. python generate_storyboard.py --demo
-```
-
-### Evaluation
-
-```bash
-PYTHONPATH=. python evaluate.py --checkpoint checkpoints/checkpoint_final.pth --device cuda
-```
-
-Metrics reported: MSE, MAE, per-parameter MSE, trajectory smoothness (jerk), path length.
 
 ### Key Hyperparameters
 
 | Parameter | Value |
 |-----------|-------|
 | Trajectory frames (T) | 48 (2s @ 24fps) |
-| Toric dimension | 6 |
+| Camera state dimension | 6 |
 | Total diffusion dim | 288 (48 × 6) |
 | Diffusion timesteps | 1000 |
 | Beta schedule | Cosine |
@@ -223,27 +224,64 @@ Metrics reported: MSE, MAE, per-parameter MSE, trajectory smoothness (jerk), pat
 
 ---
 
+## Inference
+
+```bash
+# Generate trajectory from text (requires trained checkpoint)
+PYTHONPATH=. python generate_storyboard.py \
+  --scene "Camera slowly dollies in toward two people at a table" \
+  --checkpoint checkpoints/checkpoint_final.pth \
+  --motion dolly-in --shot-type medium-shot
+
+# 3D animated visualization
+PYTHONPATH=. python visualize_3d.py \
+  --scene "Camera orbits around two people" \
+  --checkpoint checkpoints/checkpoint_final.pth \
+  --motion orbit
+```
+
+Outputs: parameter curves (PNG) + 3D animation (GIF) + 3D static view (PNG).
+
+---
+
+## Evaluation
+
+```bash
+PYTHONPATH=. python evaluate.py --checkpoint checkpoints/checkpoint_final.pth --device cuda
+```
+
+| Metric | Description |
+|---|---|
+| MSE / MAE | Reconstruction error (generated vs ground truth) |
+| Per-parameter MSE | Error breakdown for tx, ty, tz, azimuth, elevation, roll |
+| Jerk | Trajectory smoothness (lower = smoother) |
+| Jerk ratio | Generated / ground truth smoothness (closer to 1.0 = better) |
+| Path length | Total camera displacement |
+
+---
+
 ## Camera Motion Types
 
-| Type | Description | Primary Toric Change |
-|------|-------------|---------------------|
-| `static` | Fixed camera | No change |
-| `dolly-in` | Push toward subjects | pA, pB spread outward |
-| `dolly-out` | Pull away from subjects | pA, pB move inward |
-| `pan-left` | Rotate camera left | θ decreases |
-| `pan-right` | Rotate camera right | θ increases |
-| `crane-up` | Raise camera | φ increases |
-| `crane-down` | Lower camera | φ decreases |
-| `track` | Follow action laterally | θ + slight dolly |
-| `orbit` | Circle around subjects | Large θ change |
+| Type | Description | 3D Movement |
+|------|-------------|-------------|
+| `static` | Fixed camera | No movement |
+| `dolly-in` | Push toward subject | Forward along Z axis |
+| `dolly-out` | Pull away from subject | Backward along Z axis |
+| `pan-left` | Rotate camera left | Azimuth decreases |
+| `pan-right` | Rotate camera right | Azimuth increases |
+| `crane-up` | Raise camera | Upward along Y axis |
+| `crane-down` | Lower camera | Downward along Y axis |
+| `track` | Lateral follow | Sideways translation |
+| `orbit` | Circle around subject | Circular XY path |
 
 ---
 
 ## Acknowledgments
 
+- E.T. dataset: Wang et al. (2024), "E.T. the Exceptional Trajectories"
+- DDPM: Ho, Jain & Abbeel (2020), NeurIPS
+- CLIP: Radford et al. (2021), ICML
+- FiLM conditioning: Perez et al. (2018), AAAI
 - Toric camera space: Lino & Christie (2015), ACM TOG
-- DDPM: Ho, Jain & Abbeel (2020)
-- FiLM conditioning: Perez et al. (2018)
-- 6D rotation: Zhou et al. (2019), CVPR
 - DanceCamera3D: Wang et al. (2024), AAAI
 - MDM (Human Motion Diffusion): Tevet et al. (2022), ICLR

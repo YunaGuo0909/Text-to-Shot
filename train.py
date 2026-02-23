@@ -11,8 +11,6 @@ import os
 import yaml
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
-
 from src.models.denoiser import CameraTrajectoryDenoiser
 from src.models.diffusion import GaussianDiffusion
 from src.data.dataset import CameraTrajectoryDataset, collate_fn
@@ -144,8 +142,7 @@ def train(config, device, use_clip=True):
         total_loss = 0
         num_batches = 0
 
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
-        for batch in pbar:
+        for batch in dataloader:
             y = batch['y'].to(device)
 
             # Text encoding
@@ -179,7 +176,6 @@ def train(config, device, use_clip=True):
 
             total_loss += loss.item()
             num_batches += 1
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         avg_loss = total_loss / max(num_batches, 1)
         print(f"Epoch [{epoch+1}/{num_epochs}] Avg Loss: {avg_loss:.6f}")
