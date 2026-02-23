@@ -17,7 +17,7 @@ Screenplay ──▶ Shot Decomposer ──▶ Trajectory Diffusion Model ──
   (text)          (LLM-based)       (CLIP + DDPM denoiser)        (GIF + curves + 3D paths)
 ```
 
-Training data is sourced from the [E.T. (Exceptional Trajectories)](https://github.com/Wangt-CN/E.T.) dataset, which provides real film camera trajectories paired with textual descriptions.
+Training data is sourced from the [E.T. (Exceptional Trajectories)](https://github.com/robincourant/DIRECTOR) dataset, which provides real film camera trajectories paired with textual descriptions.
 
 ---
 
