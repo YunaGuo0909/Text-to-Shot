@@ -2,8 +2,8 @@
 Training script for the Camera Trajectory Diffusion Model.
 
 Usage:
-    python train.py --config configs/default.yaml
     python train.py --config configs/default.yaml --device cuda
+    python train.py --config configs/default.yaml --device cpu --no-clip
 """
 
 import argparse
@@ -11,6 +11,7 @@ import os
 import yaml
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.models.denoiser import CameraTrajectoryDenoiser
 from src.models.diffusion import GaussianDiffusion
@@ -25,6 +26,8 @@ def parse_args():
                         help='Path to checkpoint to resume from')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to train on')
+    parser.add_argument('--no-clip', action='store_true',
+                        help='Use random text embeddings instead of CLIP (for testing)')
     return parser.parse_args()
 
 
@@ -33,11 +36,33 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
-def train(config, device):
+def build_text_encoder(config, device, use_clip=True):
+    """Build text encoder: real CLIP or random fallback."""
+    if use_clip:
+        try:
+            from src.models.text_encoder import CLIPTextEncoder
+            model_name = config['text_encoder']['model_name']
+            print(f"Loading CLIP text encoder: {model_name}")
+            encoder = CLIPTextEncoder(model_name=model_name, device=device)
+            encoder = encoder.to(device)
+            print("CLIP text encoder loaded successfully.")
+            return encoder
+        except Exception as e:
+            print(f"Warning: Failed to load CLIP ({e}). Falling back to random embeddings.")
+            return None
+    else:
+        print("Using random text embeddings (--no-clip flag set).")
+        return None
+
+
+def train(config, device, use_clip=True):
     """Main training loop."""
 
     model_cfg = config['model']
     traj_cfg = config['trajectory']
+
+    # Text encoder
+    text_encoder = build_text_encoder(config, device, use_clip)
 
     # Create denoiser
     denoiser = CameraTrajectoryDenoiser(
@@ -46,7 +71,7 @@ def train(config, device):
         hidden_dim=model_cfg['hidden_dim'],
         num_layers=model_cfg['num_layers'],
         num_heads=model_cfg['num_heads'],
-        text_dim=512,  # CLIP embedding dim
+        text_dim=512,
         timestep_dim=128,
         num_shot_types=len(config['shot_types']['categories']),
         shot_type_dim=config['shot_types']['embedding_dim'],
@@ -61,6 +86,15 @@ def train(config, device):
         num_timesteps=config['diffusion']['num_timesteps'],
         beta_schedule=config['diffusion']['beta_schedule'],
     ).to(device)
+
+    # Resume from checkpoint
+    start_epoch = 0
+    if args.resume and os.path.exists(args.resume):
+        print(f"Resuming from {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device)
+        diffusion.load_state_dict(ckpt['model_state_dict'])
+        start_epoch = ckpt.get('epoch', 0)
+        print(f"Resumed from epoch {start_epoch}")
 
     # Create dataset and dataloader
     dataset = CameraTrajectoryDataset(
@@ -86,6 +120,10 @@ def train(config, device):
         weight_decay=config['training']['weight_decay'],
     )
 
+    if args.resume and os.path.exists(args.resume):
+        if 'optimizer_state_dict' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+
     # Training loop
     num_epochs = config['training']['num_epochs']
     save_interval = config['training']['save_interval']
@@ -94,21 +132,27 @@ def train(config, device):
 
     total_params = sum(p.numel() for p in diffusion.parameters())
     trainable_params = sum(p.numel() for p in diffusion.parameters() if p.requires_grad)
-    print(f"Starting training for {num_epochs} epochs...")
+    print(f"\nStarting training for {num_epochs} epochs (from epoch {start_epoch})...")
     print(f"Total parameters: {total_params:,}  |  Trainable: {trainable_params:,}")
     print(f"Trajectory: {traj_cfg['default_num_frames']} frames x {model_cfg['toric_dim']}D "
           f"= {traj_cfg['default_num_frames'] * model_cfg['toric_dim']}D total")
+    print(f"Dataset: {len(dataset)} samples  |  Batch size: {config['training']['batch_size']}")
+    print(f"Text conditioning: {'CLIP' if text_encoder else 'Random'}\n")
 
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         diffusion.train()
         total_loss = 0
         num_batches = 0
 
-        for batch in dataloader:
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        for batch in pbar:
             y = batch['y'].to(device)
 
-            # TODO: Replace with actual CLIP text encoding
-            text_embed = torch.randn(y.shape[0], 512, device=device)
+            # Text encoding
+            if text_encoder is not None:
+                text_embed = text_encoder(batch['texts'])
+            else:
+                text_embed = torch.randn(y.shape[0], 512, device=device)
 
             # Shot type conditioning
             shot_types = batch['shot_types'].to(device)
@@ -135,9 +179,10 @@ def train(config, device):
 
             total_loss += loss.item()
             num_batches += 1
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         avg_loss = total_loss / max(num_batches, 1)
-        print(f"Epoch [{epoch+1}/{num_epochs}] Loss: {avg_loss:.6f}")
+        print(f"Epoch [{epoch+1}/{num_epochs}] Avg Loss: {avg_loss:.6f}")
 
         if (epoch + 1) % save_interval == 0:
             ckpt_path = os.path.join(checkpoint_dir, f'checkpoint_epoch{epoch+1}.pth')
@@ -150,7 +195,16 @@ def train(config, device):
             }, ckpt_path)
             print(f"Checkpoint saved to {ckpt_path}")
 
-    print("Training complete!")
+    # Save final model
+    final_path = os.path.join(checkpoint_dir, 'checkpoint_final.pth')
+    torch.save({
+        'epoch': num_epochs,
+        'model_state_dict': diffusion.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': avg_loss,
+        'config': config,
+    }, final_path)
+    print(f"\nTraining complete! Final model saved to {final_path}")
 
 
 if __name__ == '__main__':
@@ -160,4 +214,4 @@ if __name__ == '__main__':
     device = args.device if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    train(config, device)
+    train(config, device, use_clip=not args.no_clip)

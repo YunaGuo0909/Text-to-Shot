@@ -65,6 +65,7 @@ Text-to-Shot/
 │   ├── models/                      # Neural network modules
 │   │   ├── diffusion.py             # Gaussian diffusion process (DDPM)
 │   │   ├── denoiser.py              # Temporal Transformer denoiser
+│   │   ├── text_encoder.py          # CLIP text encoder wrapper
 │   │   ├── film.py                  # FiLM conditioning layer
 │   │   └── interaction.py           # Temporal smoothing & inter-shot coherence
 │   ├── pipeline/                    # Generation pipeline
@@ -77,8 +78,12 @@ Text-to-Shot/
 │   └── utils/
 │       ├── toric.py                 # Toric camera parameterization utilities
 │       └── smpl_utils.py            # Camera & rotation utility functions
-├── train.py                         # Model training script
-├── generate_storyboard.py           # Trajectory generation entry point
+├── scripts/
+│   ├── preprocess_et_data.py        # E.T. dataset preprocessing
+│   └── verify_data.py               # Data verification script
+├── train.py                         # Model training script (CLIP integrated)
+├── generate_storyboard.py           # Inference & demo entry point
+├── evaluate.py                      # Quantitative evaluation script
 ├── pyproject.toml                   # Dependencies (uv)
 └── README.md
 ```
@@ -171,8 +176,34 @@ Each `.npy` file contains a `(T, 6)` NumPy array of Toric camera states.
 ### Run Training
 
 ```bash
-uv run python train.py --config configs/default.yaml --device cuda
+# With CLIP text conditioning (requires transformers library)
+PYTHONPATH=. python train.py --config configs/default.yaml --device cuda
+
+# Without CLIP (random text embeddings, for quick testing)
+PYTHONPATH=. python train.py --config configs/default.yaml --device cuda --no-clip
 ```
+
+### Inference (after training)
+
+```bash
+# Generate trajectory from text description
+PYTHONPATH=. python generate_storyboard.py \
+  --scene "Camera slowly dollies in toward two people at a table" \
+  --checkpoint checkpoints/checkpoint_final.pth \
+  --motion dolly-in \
+  --shot-type medium-shot
+
+# Rule-based demo (no trained model needed)
+PYTHONPATH=. python generate_storyboard.py --demo
+```
+
+### Evaluation
+
+```bash
+PYTHONPATH=. python evaluate.py --checkpoint checkpoints/checkpoint_final.pth --device cuda
+```
+
+Metrics reported: MSE, MAE, per-parameter MSE, trajectory smoothness (jerk), path length.
 
 ### Key Hyperparameters
 

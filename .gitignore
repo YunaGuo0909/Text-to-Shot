@@ -40,6 +40,10 @@ pretrained/
 *.h5
 *.npy
 
+# Archives
+*.tar.gz
+*.zip
+
 # Results (large files)
 outputs/
 results/visualizations/
