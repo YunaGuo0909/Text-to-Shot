@@ -44,12 +44,11 @@ pretrained/
 *.tar.gz
 *.zip
 
-# Results (large files)
-outputs/
+# Results — keep evaluation results and key visualizations
+outputs/*.mp4
+outputs/*.mov
+outputs/*.avi
 results/visualizations/
-*.mp4
-*.mov
-*.avi
 
 # Logs
 logs/
