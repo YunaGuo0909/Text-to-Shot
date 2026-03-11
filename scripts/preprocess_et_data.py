@@ -192,10 +192,10 @@ def infer_shot_type(caption: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description='Preprocess E.T. dataset')
-    parser.add_argument('--et-root', type=str, default='data/et-data',
+    parser.add_argument('--et-root', type=str, default='/transfer/et-data',
                         help='Path to E.T. dataset root')
-    parser.add_argument('--output-root', type=str, default='data',
-                        help='Output directory for processed data')
+    parser.add_argument('--output-root', type=str, default='/transfer/data',
+                        help='Output directory for processed data (train_index.json, trajectories/)')
     parser.add_argument('--num-frames', type=int, default=48,
                         help='Number of frames to resample each trajectory to')
     parser.add_argument('--min-frames', type=int, default=10,

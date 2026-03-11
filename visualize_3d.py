@@ -429,7 +429,7 @@ def main():
     parser.add_argument('--motion', type=str, default='dolly-in',
                         help='Camera motion type')
     parser.add_argument('--shot-type', type=str, default='medium-shot')
-    parser.add_argument('--output', type=str, default='outputs/trajectory_3d.gif')
+    parser.add_argument('--output', type=str, default='/transfer/outputs/trajectory_3d.gif')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--demo', action='store_true',
                         help='Use rule-based trajectory')
@@ -440,7 +440,7 @@ def main():
     parser.add_argument('--fps', type=int, default=12)
     args = parser.parse_args()
 
-    os.makedirs(os.path.dirname(args.output) or 'outputs', exist_ok=True)
+    os.makedirs(os.path.dirname(args.output) or '/transfer/outputs', exist_ok=True)
 
     if args.compare_motions:
         motion_types = ['static', 'dolly-in', 'dolly-out', 'pan-left',

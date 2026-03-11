@@ -270,16 +270,17 @@ def demo_with_mock_data():
     )
 
     renderer = TrajectoryRenderer()
-    os.makedirs('outputs', exist_ok=True)
+    out_dir = "/transfer/outputs"
+    os.makedirs(out_dir, exist_ok=True)
 
     print("\nRendering trajectory storyboard grid...")
-    renderer.render_storyboard(storyboard, cols=3, save_path='outputs/demo_trajectory_storyboard.png')
+    renderer.render_storyboard(storyboard, cols=3, save_path=f'{out_dir}/demo_trajectory_storyboard.png')
 
     print("Rendering detailed trajectory curves for Shot 4 (dolly-in)...")
-    renderer.render_trajectory_detail(storyboard.shots[3], save_path='outputs/demo_trajectory_detail.png')
+    renderer.render_trajectory_detail(storyboard.shots[3], save_path=f'{out_dir}/demo_trajectory_detail.png')
 
     print("Rendering top-down camera path...")
-    renderer.render_camera_path_topdown(storyboard, save_path='outputs/demo_camera_path.png')
+    renderer.render_camera_path_topdown(storyboard, save_path=f'{out_dir}/demo_camera_path.png')
 
     print("\n" + "=" * 60)
     print(f"Generated trajectories for {len(storyboard.shots)} shots")
@@ -291,19 +292,18 @@ def demo_with_mock_data():
 
     # Single-person camera view: render what the camera sees (person as cube)
     if any(shot.person_trajectory is not None for shot in storyboard.shots):
-        os.makedirs("outputs", exist_ok=True)
         for i, shot in enumerate(storyboard.shots):
             if shot.person_trajectory is not None:
                 render_camera_view_animation(
                     shot.camera_trajectory.trajectory,
                     shot.person_trajectory,
-                    save_path=f"outputs/demo_camera_view_shot{i + 1}.gif",
+                    save_path=f"{out_dir}/demo_camera_view_shot{i + 1}.gif",
                     fps=12,
                     cam_trajectory_is_toric=True,
                 )
-        print("Camera view GIFs (person as cube) saved to: outputs/demo_camera_view_shot*.gif")
+        print(f"Camera view GIFs (person as cube) saved to: {out_dir}/demo_camera_view_shot*.gif")
 
-    print(f"\nOutputs saved to: outputs/demo_*.png")
+    print(f"\nOutputs saved to: {out_dir}/demo_*.png")
     print("=" * 60)
 
 
@@ -313,7 +313,7 @@ def main():
                         help='Scene/camera description text')
     parser.add_argument('--checkpoint', type=str, default=None,
                         help='Path to trained model checkpoint')
-    parser.add_argument('--output', type=str, default='outputs/generated.png',
+    parser.add_argument('--output', type=str, default='/transfer/outputs/generated.png',
                         help='Output image base path')
     parser.add_argument('--shot-type', type=str, default='medium-shot',
                         choices=list(SHOT_TYPE_MAP.keys()),

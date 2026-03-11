@@ -51,7 +51,7 @@ def main():
 
     download_dir = args.download_dir or os.environ.get("ET_DATA_DOWNLOAD_DIR")
     if not download_dir:
-        download_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "et-data")
+        download_dir = "/transfer/et-data"
 
     download_dir = os.path.abspath(download_dir)
     print(f"E.T. dataset will be downloaded to: {download_dir}")
@@ -80,8 +80,8 @@ def main():
         print("No untar_and_move.sh found; if the dataset uses tarballs, run it manually in the download dir.")
 
     print("\nNext steps:")
-    print(f"  1. Preprocess: python scripts/preprocess_et_data.py --et-root {download_dir} --output-root data")
-    print(f"  2. (Optional) Single-person subset: python scripts/filter_et_single_person.py --data-root data")
+    print(f"  1. Preprocess: python scripts/preprocess_et_data.py --et-root {download_dir} --output-root /transfer/data")
+    print(f"  2. (Optional) Single-person subset: python scripts/filter_et_single_person.py --data-root /transfer/data")
     print(f"  3. Train: python train.py --config configs/default.yaml --device cuda")
 
 

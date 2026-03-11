@@ -36,34 +36,31 @@ uv sync
 
 ## 3. 下载 E.T. 数据集（每次 clone 后执行）
 
-用脚本把 E.T. 下到**固定目录**（如 `/otherlocation/transfer`），不放进仓库，这样每次 clone 后只需重新跑一遍下载即可。
+默认下载到 **`/transfer/et-data`**，checkpoints / outputs 默认在 **`/transfer/checkpoints`**、**`/transfer/outputs`**（见 `configs/default.yaml`）。若目录不存在请先创建：`sudo mkdir -p /transfer && sudo chown $USER /transfer`（或按需调整权限）。
 
 ```bash
 export PYTHONPATH=.
 
-# 下载到固定路径（例如 /otherlocation/transfer/et-data）
-python scripts/download_et_data.py --download-dir /otherlocation/transfer/et-data
-
-# 或用环境变量（写入 .env 或 shell 配置）
-export ET_DATA_DOWNLOAD_DIR=/otherlocation/transfer/et-data
+# 使用默认路径 /transfer/et-data
 python scripts/download_et_data.py
+
+# 或指定其他目录
+python scripts/download_et_data.py --download-dir /otherlocation/transfer/et-data
 ```
 
-脚本会从 Hugging Face 拉取 `robin-courant/et-data` 并解包（若有 `untar_and_move.sh`）。完成后 E.T. 根目录即为 `--download-dir`（或 `ET_DATA_DOWNLOAD_DIR`）。
+脚本会从 Hugging Face 拉取 `robin-courant/et-data` 并解包（若有 `untar_and_move.sh`）。
 
 ---
 
 ## 4. 预处理数据
 
-在项目根目录执行，`--et-root` 指向上一步的下载目录：
+默认 `--et-root /transfer/et-data`、`--output-root /transfer/data`，直接执行即可：
 
 ```bash
 export PYTHONPATH=.
 
-python scripts/preprocess_et_data.py \
-  --et-root /otherlocation/transfer/et-data \
-  --output-root data \
-  --num-frames 48
+python scripts/preprocess_et_data.py --num-frames 48
+# 会生成 /transfer/data/train_index.json、/transfer/data/test_index.json、/transfer/data/trajectories/
 ```
 
 会生成：
@@ -78,10 +75,11 @@ python scripts/preprocess_et_data.py \
 
 ## 5. （可选）单人子集：添加而非替换
 
-若要用「单人」子集训练，在预处理之后执行：
+若要用「单人」子集训练，在预处理之后执行（默认读写 `/transfer/data`）：
 
 ```bash
-python scripts/filter_et_single_person.py --data-root data
+python scripts/filter_et_single_person.py
+# 或显式指定: python scripts/filter_et_single_person.py --data-root /transfer/data
 ```
 
 会**新增** `data/train_index_single_person.json` 和 `data/test_index_single_person.json`，**不会覆盖**原来的 `train_index.json` / `test_index.json`。
@@ -140,17 +138,17 @@ tensorboard --logdir logs
 
 ---
 
-## 9. 一步到位（下载到固定目录时）
+## 9. 一步到位（默认 /transfer）
 
-若使用 `otherlocation/transfer` 等固定目录，可顺序执行：
+默认数据与输出都在 `/transfer` 下，可顺序执行：
 
 ```bash
 cd Text-to-Shot-main
 export PYTHONPATH=.
 pip install -e .   # 或 uv sync
-python scripts/download_et_data.py --download-dir /otherlocation/transfer/et-data
-python scripts/preprocess_et_data.py --et-root /otherlocation/transfer/et-data --output-root data
+python scripts/download_et_data.py
+python scripts/preprocess_et_data.py --num-frames 48
 python train.py --config configs/default.yaml --device cuda
 ```
 
-之后用 `checkpoints/checkpoint_final.pth` 做推理或评估即可。
+权重在 `/transfer/checkpoints/checkpoint_final.pth`，评估与生成输出在 `/transfer/outputs`。

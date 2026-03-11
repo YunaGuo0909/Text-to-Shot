@@ -233,7 +233,7 @@ def main():
     parser.add_argument(
         "--output-root",
         type=str,
-        default="data",
+        default="/transfer/data",
         help="Output directory for filtered index files.",
     )
     parser.add_argument(
@@ -253,7 +253,7 @@ def main():
         print("Use either --data-root or --et-root, not both.")
         return
     if not args.data_root and not args.et_root:
-        args.data_root = "data"
+        args.data_root = "/transfer/data"
 
     print("Filter E.T. to single-person subset")
     print("=" * 50)

@@ -86,10 +86,10 @@ training:
 
 # --- Data ---
 # Use train_index.json (full/uncertain set) or train_index_single_person.json (single-person subset).
-# This way the single-person filter adds a new index file; original 500-epoch setup is unchanged.
+# Default root: /transfer (data, checkpoints, outputs all under /transfer).
 data:
   dataset_name: "shotdeck-camera"
-  data_root: "./data"
+  data_root: "/transfer/data"
   train_index_file: "train_index.json"       # or "train_index_single_person.json" for single-person training
   test_index_file: "test_index.json"        # or "test_index_single_person.json"
   num_workers: 4
@@ -105,8 +105,8 @@ rendering:
   # Grid layout for multi-shot view
   grid_cols: 3
 
-# --- Paths ---
+# --- Paths (default: all under /transfer) ---
 paths:
-  checkpoint_dir: "./checkpoints"
-  output_dir: "./outputs"
-  log_dir: "./logs"
+  checkpoint_dir: "/transfer/checkpoints"
+  output_dir: "/transfer/outputs"
+  log_dir: "/transfer/logs"

@@ -206,17 +206,14 @@ Training data is derived from the **E.T. (Exceptional Trajectories)** dataset:
 | Text descriptions | `caption_cam/*.txt` | CLIP text conditioning |
 | Train/test split | `full_train_split.txt` / `full_test_split.txt` | Official E.T. splits |
 
-**Download E.T.** (`scripts/download_et_data.py`): After each clone, download the dataset to a fixed location (e.g. outside the repo) so you don’t re-download into the project:
+**Download E.T.** (`scripts/download_et_data.py`): Default download location is `/transfer/et-data`. After each clone, run once:
 
 ```bash
-# Download to a fixed path (e.g. /otherlocation/transfer/et-data)
-PYTHONPATH=. python scripts/download_et_data.py --download-dir /otherlocation/transfer/et-data
-
-# Or set once: export ET_DATA_DOWNLOAD_DIR=/otherlocation/transfer/et-data
-# Then: PYTHONPATH=. python scripts/download_et_data.py
+PYTHONPATH=. python scripts/download_et_data.py
+# Downloads to /transfer/et-data (override with --download-dir or ET_DATA_DOWNLOAD_DIR)
 ```
 
-Then run preprocessing with `--et-root` pointing to that path.
+Preprocessing and training use `/transfer` by default: data under `/transfer/data`, checkpoints under `/transfer/checkpoints`, outputs under `/transfer/outputs` (see `configs/default.yaml`).
 
 **Preprocessing** (`scripts/preprocess_et_data.py`):
 1. Parse 3×4 extrinsic matrices → extract rotation (Euler angles) and translation

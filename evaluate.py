@@ -225,9 +225,10 @@ def evaluate(args):
 
     print("=" * 60)
 
-    # Save results
-    os.makedirs('outputs', exist_ok=True)
-    results_path = 'outputs/evaluation_results.json'
+    # Save results (default: /transfer/outputs from config)
+    output_dir = config.get('paths', {}).get('output_dir', '/transfer/outputs')
+    os.makedirs(output_dir, exist_ok=True)
+    results_path = os.path.join(output_dir, 'evaluation_results.json')
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {results_path}")
