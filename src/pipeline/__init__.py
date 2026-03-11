@@ -2,3 +2,5 @@ from .shot_decomposer import ShotDecomposer
 from .storyboard_generator import TrajectoryPipeline
 from .storyboard_renderer import TrajectoryRenderer
 from .camera_trajectory import CameraTrajectoryGenerator
+from .person_trajectory import PersonTrajectoryGenerator
+from .camera_view_renderer import render_camera_view_animation, render_camera_view_static

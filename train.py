@@ -94,12 +94,13 @@ def train(config, device, use_clip=True):
         start_epoch = ckpt.get('epoch', 0)
         print(f"Resumed from epoch {start_epoch}")
 
-    # Create dataset and dataloader
+    # Create dataset and dataloader (index_file: use full set or single-person subset from config)
     dataset = CameraTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='train',
         num_frames=traj_cfg['default_num_frames'],
         toric_dim=model_cfg['toric_dim'],
+        index_file=config['data'].get('train_index_file'),
     )
 
     dataloader = DataLoader(

@@ -13,15 +13,17 @@ from dataclasses import dataclass, field
 
 from .shot_decomposer import ShotConfig, StoryboardPlan, SHOT_TYPE_MAP, CAMERA_MOTION_MAP
 from .camera_trajectory import CameraTrajectory, CameraTrajectoryGenerator
+from .person_trajectory import PersonTrajectoryGenerator
 
 
 @dataclass
 class GeneratedShot:
-    """A generated shot with camera trajectory."""
+    """A generated shot with camera trajectory and optional person trajectory."""
     shot_config: ShotConfig
     camera_trajectory: CameraTrajectory  # Generated camera motion trajectory
     toric_start: np.ndarray = None       # (6,) starting Toric state
     toric_end: np.ndarray = None         # (6,) ending Toric state
+    person_trajectory: Optional[np.ndarray] = None  # (T, 3) person positions when with_person
 
 
 @dataclass
@@ -51,6 +53,7 @@ class TrajectoryPipeline:
         self.text_encoder = text_encoder
         self.device = device
         self.rule_based_generator = CameraTrajectoryGenerator(default_num_frames=48)
+        self.person_trajectory_generator = PersonTrajectoryGenerator(num_frames=48)
 
     @torch.no_grad()
     def generate(
@@ -58,6 +61,7 @@ class TrajectoryPipeline:
         plan: StoryboardPlan,
         mode: str = "rule_based",
         smooth_transitions: bool = True,
+        with_person: bool = False,
     ) -> GeneratedStoryboard:
         """
         Generate camera trajectories for all shots.
@@ -83,11 +87,20 @@ class TrajectoryPipeline:
             if smooth_transitions and prev_shot is not None:
                 trajectory = self._smooth_transition(prev_shot, trajectory)
 
+            person_traj = None
+            if with_person:
+                num_frames = trajectory.trajectory.shape[0]
+                person_traj = self.person_trajectory_generator.generate(
+                    shot_config.person_motion_description or shot_config.description,
+                    num_frames=num_frames,
+                )
+
             shot = GeneratedShot(
                 shot_config=shot_config,
                 camera_trajectory=trajectory,
                 toric_start=trajectory.trajectory[0].copy(),
                 toric_end=trajectory.trajectory[-1].copy(),
+                person_trajectory=person_traj,
             )
             generated_shots.append(shot)
             prev_shot = shot

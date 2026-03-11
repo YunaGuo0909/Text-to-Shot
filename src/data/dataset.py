@@ -44,6 +44,7 @@ class CameraTrajectoryDataset(Dataset):
         split: str = 'train',
         num_frames: int = 48,
         toric_dim: int = 6,
+        index_file: Optional[str] = None,
     ):
         """
         Args:
@@ -51,18 +52,22 @@ class CameraTrajectoryDataset(Dataset):
             split: Dataset split ('train', 'val', 'test')
             num_frames: Expected number of frames per trajectory
             toric_dim: Dimension of Toric camera state (6)
+            index_file: Optional index filename (e.g. train_index_single_person.json).
+                        If None, uses {split}_index.json so original behaviour is unchanged.
         """
         self.data_root = data_root
         self.split = split
         self.num_frames = num_frames
         self.toric_dim = toric_dim
         self.total_dim = num_frames * toric_dim
+        self.index_file = index_file
 
         self.samples = self._load_index()
 
     def _load_index(self) -> List[Dict]:
-        """Load dataset index file."""
-        index_path = os.path.join(self.data_root, f'{self.split}_index.json')
+        """Load dataset index file (original or single-person subset without replacing files)."""
+        index_name = self.index_file if self.index_file is not None else f'{self.split}_index.json'
+        index_path = os.path.join(self.data_root, index_name)
         if os.path.exists(index_path):
             with open(index_path, 'r', encoding='utf-8') as f:
                 return json.load(f)

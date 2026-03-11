@@ -24,6 +24,8 @@ dependencies = [
     "tensorboard>=2.13.0",
     "wandb>=0.15.0",
 
+    # Data / Dataset download
+    "huggingface_hub>=0.20.0",
     # Data Processing
     "scipy>=1.10.0",
     "numpy>=1.24.0",

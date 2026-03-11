@@ -22,6 +22,7 @@ class ShotConfig:
     duration_hint: float = 3.0  # seconds
     emotional_tone: str = ""  # e.g., tense, calm, dramatic, playful
     notes: str = ""
+    person_motion_description: str = ""  # e.g. "person walks toward camera", "character stands still"
 
 
 @dataclass
@@ -75,6 +76,7 @@ For each shot, provide:
 5. "duration_hint": Estimated duration in seconds (1-8)
 6. "emotional_tone": The mood this shot conveys (e.g., "tense", "calm", "dramatic", "intimate")
 7. "notes": Cinematographic reasoning for your camera choices
+8. "person_motion_description": How the character/person moves in this shot (e.g., "person walks toward camera", "character stands still", "person moves left", "subject runs forward"). Keep it short and actionable for trajectory generation.
 
 Follow these cinematographic principles:
 - Start with an establishing wide shot to set the scene
@@ -140,6 +142,7 @@ Output ONLY a valid JSON array."""
                 duration_hint=desc.get("duration_hint", 3.0),
                 emotional_tone=desc.get("emotional_tone", ""),
                 notes=desc.get("notes", ""),
+                person_motion_description=desc.get("person_motion_description", ""),
             ))
         return StoryboardPlan(
             scene_description="Manual shot plan",
@@ -190,6 +193,7 @@ Output ONLY a valid JSON array."""
                     duration_hint=data.get("duration_hint", 3.0),
                     emotional_tone=data.get("emotional_tone", ""),
                     notes=data.get("notes", ""),
+                    person_motion_description=data.get("person_motion_description", ""),
                 ))
             return shots
         except json.JSONDecodeError as e:

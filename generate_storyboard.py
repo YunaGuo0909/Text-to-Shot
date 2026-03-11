@@ -21,6 +21,8 @@ from src.pipeline.shot_decomposer import ShotConfig, StoryboardPlan, CAMERA_MOTI
 from src.pipeline.storyboard_generator import GeneratedShot, GeneratedStoryboard, TrajectoryPipeline
 from src.pipeline.storyboard_renderer import TrajectoryRenderer
 from src.pipeline.camera_trajectory import CameraTrajectory, CameraTrajectoryGenerator
+from src.pipeline.camera_view_renderer import render_camera_view_animation, render_camera_view_static
+from src.pipeline.person_trajectory import PersonTrajectoryGenerator
 
 
 def load_model(checkpoint_path, device='cuda'):
@@ -162,18 +164,27 @@ def inference_single(args):
     os.makedirs(os.path.dirname(args.output) or 'outputs', exist_ok=True)
 
     # Build GeneratedShot for rendering
+    person_gen = PersonTrajectoryGenerator(num_frames=48) if getattr(args, 'with_person', False) else None
     shots = []
     for i, traj in enumerate(trajectories):
+        shot_config = ShotConfig(
+            shot_index=i + 1,
+            description=args.scene,
+            shot_type=args.shot_type,
+            camera_motion=args.motion,
+        )
+        person_traj = None
+        if person_gen is not None:
+            person_traj = person_gen.generate(
+                getattr(shot_config, 'person_motion_description', None) or args.scene,
+                num_frames=traj.trajectory.shape[0],
+            )
         shot = GeneratedShot(
-            shot_config=ShotConfig(
-                shot_index=i + 1,
-                description=args.scene,
-                shot_type=args.shot_type,
-                camera_motion=args.motion,
-            ),
+            shot_config=shot_config,
             camera_trajectory=traj,
             toric_start=traj.trajectory[0],
             toric_end=traj.trajectory[-1],
+            person_trajectory=person_traj,
         )
         shots.append(shot)
 
@@ -209,6 +220,17 @@ def inference_single(args):
     create_static_3d_view(traj_data, title=anim_title,
                           save_path=f"{base_path}_3d_static.png")
 
+    # Camera view (what camera sees, person as cube) when requested
+    if getattr(args, 'render_camera_view', False) and shots[0].person_trajectory is not None:
+        render_camera_view_animation(
+            shots[0].camera_trajectory.trajectory,
+            shots[0].person_trajectory,
+            save_path=f"{base_path}_camera_view.gif",
+            fps=12,
+            cam_trajectory_is_toric=False,  # model outputs world-space
+        )
+        print(f"Camera view saved to: {base_path}_camera_view.gif")
+
 
 def demo_with_mock_data():
     """Demo trajectory generation with rule-based motion profiles."""
@@ -221,23 +243,31 @@ def demo_with_mock_data():
         scene_description="Two people meet at a cafe. They greet each other, shake hands, and sit down for a conversation.",
         shots=[
             ShotConfig(shot_index=1, description="Establishing wide shot of the cafe exterior, camera descends to entrance level.",
-                       shot_type="wide-shot", camera_motion="crane-down", duration_hint=4.0, emotional_tone="calm"),
+                       shot_type="wide-shot", camera_motion="crane-down", duration_hint=4.0, emotional_tone="calm",
+                       person_motion_description="person stands still"),
             ShotConfig(shot_index=2, description="Medium shot panning to follow a person approaching the cafe.",
-                       shot_type="medium-shot", camera_motion="pan-right", duration_hint=3.0, emotional_tone="anticipation"),
+                       shot_type="medium-shot", camera_motion="pan-right", duration_hint=3.0, emotional_tone="anticipation",
+                       person_motion_description="person walks forward toward camera"),
             ShotConfig(shot_index=3, description="Tracking shot following the character as they walk inside.",
-                       shot_type="medium-shot", camera_motion="track", duration_hint=3.5, emotional_tone="movement"),
+                       shot_type="medium-shot", camera_motion="track", duration_hint=3.5, emotional_tone="movement",
+                       person_motion_description="person walks forward"),
             ShotConfig(shot_index=4, description="Dolly in to a close-up of the handshake between the two people.",
-                       shot_type="close-up", camera_motion="dolly-in", duration_hint=2.5, emotional_tone="intimate"),
+                       shot_type="close-up", camera_motion="dolly-in", duration_hint=2.5, emotional_tone="intimate",
+                       person_motion_description="character stands still"),
             ShotConfig(shot_index=5, description="Two-shot of both people sitting down at a table.",
-                       shot_type="two-shot", camera_motion="static", duration_hint=3.0, emotional_tone="settled"),
+                       shot_type="two-shot", camera_motion="static", duration_hint=3.0, emotional_tone="settled",
+                       person_motion_description="person stands still"),
             ShotConfig(shot_index=6, description="Slow orbit around the table as conversation begins.",
-                       shot_type="medium-shot", camera_motion="orbit", duration_hint=5.0, emotional_tone="engaging"),
+                       shot_type="medium-shot", camera_motion="orbit", duration_hint=5.0, emotional_tone="engaging",
+                       person_motion_description="person stands still"),
         ],
         total_shots=6,
     )
 
     pipeline = TrajectoryPipeline(diffusion_model=None, text_encoder=None, device='cpu')
-    storyboard = pipeline.generate(plan, mode="rule_based", smooth_transitions=True)
+    storyboard = pipeline.generate(
+        plan, mode="rule_based", smooth_transitions=True, with_person=True
+    )
 
     renderer = TrajectoryRenderer()
     os.makedirs('outputs', exist_ok=True)
@@ -258,6 +288,20 @@ def demo_with_mock_data():
         print(f"  Shot {shot.shot_config.shot_index}: [{shot.shot_config.shot_type:18s}] "
               f"[CAM: {shot.shot_config.camera_motion:10s}] "
               f"frames={shot.camera_trajectory.num_frames:3d}  jerk={sm['mean_jerk']:.4f}")
+
+    # Single-person camera view: render what the camera sees (person as cube)
+    if any(shot.person_trajectory is not None for shot in storyboard.shots):
+        os.makedirs("outputs", exist_ok=True)
+        for i, shot in enumerate(storyboard.shots):
+            if shot.person_trajectory is not None:
+                render_camera_view_animation(
+                    shot.camera_trajectory.trajectory,
+                    shot.person_trajectory,
+                    save_path=f"outputs/demo_camera_view_shot{i + 1}.gif",
+                    fps=12,
+                    cam_trajectory_is_toric=True,
+                )
+        print("Camera view GIFs (person as cube) saved to: outputs/demo_camera_view_shot*.gif")
 
     print(f"\nOutputs saved to: outputs/demo_*.png")
     print("=" * 60)
@@ -283,6 +327,10 @@ def main():
                         help='Computation device')
     parser.add_argument('--demo', action='store_true',
                         help='Run demo with rule-based trajectories')
+    parser.add_argument('--with-person', action='store_true',
+                        help='Generate person trajectory and include in storyboard (demo or LLM decompose)')
+    parser.add_argument('--render-camera-view', action='store_true',
+                        help='Render camera-view GIF (what camera sees, person as cube)')
     args = parser.parse_args()
 
     if args.demo:

@@ -145,12 +145,13 @@ def evaluate(args):
         except Exception as e:
             print(f"CLIP unavailable ({e}), using random embeddings.")
 
-    # Test dataset
+    # Test dataset (index_file: full or single-person subset from config)
     test_dataset = CameraTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='test',
         num_frames=num_frames,
         toric_dim=toric_dim,
+        index_file=config['data'].get('test_index_file'),
     )
 
     test_loader = DataLoader(
