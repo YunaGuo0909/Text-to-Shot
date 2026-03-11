@@ -161,7 +161,7 @@ def inference_single(args):
 
     # Visualize
     renderer = TrajectoryRenderer()
-    os.makedirs(os.path.dirname(args.output) or 'outputs', exist_ok=True)
+    os.makedirs(os.path.dirname(args.output) or '/transfer/outputs', exist_ok=True)
 
     # Build GeneratedShot for rendering
     person_gen = PersonTrajectoryGenerator(num_frames=48) if getattr(args, 'with_person', False) else None
@@ -292,6 +292,7 @@ def demo_with_mock_data():
 
     # Single-person camera view: render what the camera sees (person as cube)
     if any(shot.person_trajectory is not None for shot in storyboard.shots):
+        os.makedirs(out_dir, exist_ok=True)
         for i, shot in enumerate(storyboard.shots):
             if shot.person_trajectory is not None:
                 render_camera_view_animation(

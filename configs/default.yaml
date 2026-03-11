@@ -86,7 +86,7 @@ training:
 
 # --- Data ---
 # Use train_index.json (full/uncertain set) or train_index_single_person.json (single-person subset).
-# Default root: /transfer (data, checkpoints, outputs all under /transfer).
+# Default: preprocess 输出到 /transfer/data，训练从这里读。
 data:
   dataset_name: "shotdeck-camera"
   data_root: "/transfer/data"
@@ -105,7 +105,8 @@ rendering:
   # Grid layout for multi-shot view
   grid_cols: 3
 
-# --- Paths (default: all under /transfer) ---
+# --- Paths ---
+# All under /transfer so clone and run use the same location.
 paths:
   checkpoint_dir: "/transfer/checkpoints"
   output_dir: "/transfer/outputs"

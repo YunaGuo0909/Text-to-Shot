@@ -1,22 +1,20 @@
 """
 Download E.T. (Exceptional Trajectories) dataset to a configurable location.
 
-Use this after cloning the project so the dataset lives outside the repo
-(e.g. under /otherlocation/transfer). Preprocessing (preprocess_et_data.py)
-then uses --et-root pointing to the downloaded path.
+Use this after cloning the project so the dataset lives under /transfer.
+Preprocessing (preprocess_et_data.py) then uses --et-root pointing to the downloaded path.
 
 Source: https://huggingface.co/datasets/robin-courant/et-data
 
 Usage:
-    # Default: download to ./data/et-data (project-relative)
+    # Default: download to /transfer/et-data，然后执行 untar_and_move.sh；若目录已存在则跳过下载
     PYTHONPATH=. python scripts/download_et_data.py
 
-    # Download to a fixed transfer location (same every clone)
-    PYTHONPATH=. python scripts/download_et_data.py --download-dir /otherlocation/transfer/et-data
+    # 只下载、不解压
+    PYTHONPATH=. python scripts/download_et_data.py --skip-untar
 
-    # Or set env once (e.g. in .env or shell profile)
-    export ET_DATA_DOWNLOAD_DIR=/otherlocation/transfer/et-data
-    PYTHONPATH=. python scripts/download_et_data.py
+    # Custom location
+    PYTHONPATH=. python scripts/download_et_data.py --download-dir /path/to/et-data
 """
 
 import os
@@ -45,7 +43,7 @@ def main():
     parser.add_argument(
         "--skip-untar",
         action="store_true",
-        help="Do not run untar_and_move.sh after clone (run manually if needed).",
+        help="Do not run untar_and_move.sh after download (run manually if needed).",
     )
     args = parser.parse_args()
 
@@ -54,6 +52,16 @@ def main():
         download_dir = "/transfer/et-data"
 
     download_dir = os.path.abspath(download_dir)
+
+    # 若目标目录 et-data 已存在，则跳过下载
+    if os.path.isdir(download_dir):
+        print(f"[Skip] {download_dir} already exists — skipping download.")
+        print("\nNext steps:")
+        print(f"  1. Preprocess: python scripts/preprocess_et_data.py --et-root {download_dir} --output-root /transfer/data")
+        print(f"  2. (Optional) Single-person: python scripts/filter_et_single_person.py --data-root /transfer/data")
+        print(f"  3. Train: python train.py --config configs/default.yaml --device cuda")
+        return
+
     print(f"E.T. dataset will be downloaded to: {download_dir}")
 
     try:

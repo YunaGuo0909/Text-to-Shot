@@ -85,7 +85,7 @@ To train or evaluate on **single-person** shots only, use the filter script on t
 PYTHONPATH=. python scripts/filter_et_single_person.py --data-root data
 
 # Or from raw E.T. root (no preprocess)
-PYTHONPATH=. python scripts/filter_et_single_person.py --et-root data/et-data --output-root data
+PYTHONPATH=. python scripts/filter_et_single_person.py --et-root /transfer/et-data --output-root /transfer/data
 
 # Include unknown captions in the single-person set
 PYTHONPATH=. python scripts/filter_et_single_person.py --data-root data --keep-unknown
@@ -121,7 +121,7 @@ Text-to-Shot/
 │       ├── toric.py                 # Toric camera parameterization utilities
 │       └── smpl_utils.py            # Camera & rotation utility functions
 ├── scripts/
-│   ├── download_et_data.py         # Download E.T. from Hugging Face (e.g. to /otherlocation/transfer)
+│   ├── download_et_data.py         # Download E.T. to /transfer/et-data (default)
 │   ├── preprocess_et_data.py        # E.T. dataset → training data preprocessing
 │   ├── filter_et_single_person.py   # Filter E.T. index to single-person subset by caption
 │   └── verify_data.py               # Data & model forward pass verification
@@ -206,23 +206,23 @@ Training data is derived from the **E.T. (Exceptional Trajectories)** dataset:
 | Text descriptions | `caption_cam/*.txt` | CLIP text conditioning |
 | Train/test split | `full_train_split.txt` / `full_test_split.txt` | Official E.T. splits |
 
-**Download E.T.** (`scripts/download_et_data.py`): Default download location is `/transfer/et-data`. After each clone, run once:
+**Download E.T.** (`scripts/download_et_data.py`): Default download location is `/transfer/et-data`. Checkpoints and outputs use `/transfer/checkpoints` and `/transfer/outputs` (see `configs/default.yaml`). After each clone:
 
 ```bash
 PYTHONPATH=. python scripts/download_et_data.py
-# Downloads to /transfer/et-data (override with --download-dir or ET_DATA_DOWNLOAD_DIR)
+# Downloads to /transfer/et-data; next steps use /transfer/data and /transfer/outputs
 ```
 
-Preprocessing and training use `/transfer` by default: data under `/transfer/data`, checkpoints under `/transfer/checkpoints`, outputs under `/transfer/outputs` (see `configs/default.yaml`).
+To use another path: `--download-dir /path/to/et-data` or `ET_DATA_DOWNLOAD_DIR=/path/to/et-data`. Then run preprocessing (default `--et-root /transfer/et-data --output-root /transfer/data`).
 
 **Preprocessing** (`scripts/preprocess_et_data.py`):
 1. Parse 3×4 extrinsic matrices → extract rotation (Euler angles) and translation
 2. Convert to 6D state: `(tx, ty, tz, azimuth, elevation, roll)`
 3. Resample all trajectories to 48 frames (2s @ 24fps)
 4. Auto-classify camera motion type from text via keyword matching
-5. Output: `train_index.json` (103k samples) + `test_index.json` (11k samples) + `.npy` files
+5. Output: under default `--output-root /transfer/data` → `train_index.json`, `test_index.json`, and `trajectories/*.npy` (103k+ train, 11k+ test samples when using full E.T.).
 
-**Data format** (`data/train_index.json`):
+**Data format** (`/transfer/data/train_index.json` or `data/train_index.json` if you set `--output-root data`):
 
 ```json
 [

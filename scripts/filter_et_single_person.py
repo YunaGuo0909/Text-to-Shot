@@ -234,7 +234,7 @@ def main():
         "--output-root",
         type=str,
         default="/transfer/data",
-        help="Output directory for filtered index files.",
+        help="Output directory for filtered index files (default: /transfer/data).",
     )
     parser.add_argument(
         "--output-suffix",
