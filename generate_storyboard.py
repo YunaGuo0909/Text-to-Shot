@@ -211,14 +211,26 @@ def inference_single(args):
 
     print(f"\nOutputs saved to: {base_path}_*.png")
 
-    # 3D animation
+    # 3D animation (with optional person trajectory in same figure)
     from visualize_3d import create_trajectory_animation, create_static_3d_view
     traj_data = trajectories[0].trajectory
     anim_title = f"{args.motion} | \"{args.scene[:50]}\""
+    person_traj = shots[0].person_trajectory if shots[0].person_trajectory is not None else None
     create_trajectory_animation(traj_data, title=anim_title,
-                                save_path=f"{base_path}_3d.gif")
+                                save_path=f"{base_path}_3d.gif",
+                                person_trajectory=person_traj)
     create_static_3d_view(traj_data, title=anim_title,
-                          save_path=f"{base_path}_3d_static.png")
+                          save_path=f"{base_path}_3d_static.png",
+                          person_trajectory=person_traj)
+
+    # Camera & person in one top-down 2D figure
+    if shots[0].person_trajectory is not None:
+        renderer.render_camera_and_person_path_topdown(
+            shots[0],
+            save_path=f"{base_path}_camera_person_topdown.png",
+            camera_trajectory_is_toric=False,
+        )
+        print(f"Camera+person top-down saved to: {base_path}_camera_person_topdown.png")
 
     # Camera view (what camera sees, person as cube) when requested
     if getattr(args, 'render_camera_view', False) and shots[0].person_trajectory is not None:
@@ -302,7 +314,30 @@ def demo_with_mock_data():
                     fps=12,
                     cam_trajectory_is_toric=True,
                 )
+                # Camera and person in one top-down 2D figure
+                renderer.render_camera_and_person_path_topdown(
+                    shot,
+                    save_path=f"{out_dir}/demo_camera_person_shot{i + 1}.png",
+                    camera_trajectory_is_toric=True,
+                )
         print(f"Camera view GIFs (person as cube) saved to: {out_dir}/demo_camera_view_shot*.gif")
+        print(f"Camera+person top-down figures saved to: {out_dir}/demo_camera_person_shot*.png")
+
+    # One 3D animation with camera + person in same figure (e.g. shot 2)
+    for i, shot in enumerate(storyboard.shots):
+        if shot.person_trajectory is not None:
+            from visualize_3d import create_trajectory_animation, create_static_3d_view
+            cam_traj = shot.camera_trajectory.trajectory
+            from src.pipeline.camera_view_renderer import _ensure_world_trajectory
+            cam_world = _ensure_world_trajectory(cam_traj, shot.person_trajectory, is_toric=True)
+            create_trajectory_animation(cam_world, title=f"Shot {shot.shot_config.shot_index}: Camera & Person",
+                                        save_path=f"{out_dir}/demo_camera_person_3d_shot{i + 1}.gif",
+                                        person_trajectory=shot.person_trajectory)
+            create_static_3d_view(cam_world, title=f"Shot {shot.shot_config.shot_index}: Camera & Person",
+                                  save_path=f"{out_dir}/demo_camera_person_3d_shot{i + 1}_static.png",
+                                  person_trajectory=shot.person_trajectory)
+            print(f"Camera+person 3D (same figure) saved to: {out_dir}/demo_camera_person_3d_shot{i + 1}.gif and _static.png")
+            break
 
     print(f"\nOutputs saved to: {out_dir}/demo_*.png")
     print("=" * 60)

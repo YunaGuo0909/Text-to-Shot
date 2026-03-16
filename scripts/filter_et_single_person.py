@@ -84,6 +84,8 @@ def load_text_from_et_root(et_root: str, sample_id: str) -> str:
             try:
                 with open(p, "r", encoding="utf-8", errors="replace") as f:
                     text = (text + " " + f.read().strip()).strip()
+            except Exception:
+                pass
     return text
 
 

@@ -57,6 +57,8 @@ PYTHONPATH=. python visualize_3d.py --compare-motions
 | `outputs/demo_trajectory_storyboard.png` | 6-panel grid with per-shot trajectory curves |
 | `outputs/demo_trajectory_detail.png` | Detailed parameter evolution for one shot |
 | `outputs/demo_camera_path.png` | Top-down camera path |
+| `outputs/demo_camera_person_shot*.png` | Camera and person in one top-down 2D figure (per shot) |
+| `outputs/demo_camera_person_3d_shot*_static.png` / `.gif` | Camera and person in one 3D figure |
 | `outputs/test_orbit.gif` | 3D animated camera trajectory (GIF) |
 | `outputs/test_orbit_static.png` | 3D static view with camera frustums |
 | `outputs/all_motions_comparison.png` | 9 motion types side-by-side comparison |

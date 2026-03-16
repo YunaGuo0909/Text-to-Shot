@@ -110,6 +110,7 @@ def create_trajectory_animation(
     save_path: str = "outputs/trajectory_3d.gif",
     fps: int = 12,
     trail_length: int = 10,
+    person_trajectory: Optional[np.ndarray] = None,
 ):
     """
     Create an animated GIF of the camera moving through 3D space.
@@ -120,12 +121,20 @@ def create_trajectory_animation(
         save_path: Output path (.gif or .mp4)
         fps: Frames per second
         trail_length: Number of past frames to show as trail
+        person_trajectory: Optional (T, 3) person positions to draw in same figure
     """
     positions, directions = trajectory_to_positions(traj_data)
     T = len(positions)
 
-    center = positions.mean(axis=0)
-    spread = max(np.ptp(positions, axis=0).max(), 0.5) * 1.2
+    all_pts = positions
+    if person_trajectory is not None:
+        T = min(T, person_trajectory.shape[0])
+        positions = positions[:T]
+        directions = directions[:T]
+        person_trajectory = person_trajectory[:T]
+        all_pts = np.concatenate([positions, person_trajectory], axis=0)
+    center = all_pts.mean(axis=0)
+    spread = max(np.ptp(all_pts, axis=0).max(), 0.5) * 1.2
 
     fig = plt.figure(figsize=(10, 8), facecolor='#1a1a2e')
     ax = fig.add_subplot(111, projection='3d', facecolor='#1a1a2e')
@@ -153,14 +162,24 @@ def create_trajectory_animation(
     ax.plot3D(positions[:, 0], positions[:, 1], positions[:, 2],
               color='#FFE66D', alpha=0.15, linewidth=1)
 
+    # Person path when provided
+    if person_trajectory is not None:
+        ax.plot3D(person_trajectory[:, 0], person_trajectory[:, 1], person_trajectory[:, 2],
+                 color='#4ECDC4', alpha=0.2, linewidth=1)
+        ax.scatter(*person_trajectory[0], color='#95E66D', s=50, marker='^',
+                   edgecolors='white', linewidths=1, zorder=9, label='Person start')
+
     # Start marker
     ax.scatter(*positions[0], color='#4ECDC4', s=60, marker='o',
-               edgecolors='white', linewidths=1, zorder=10, label='Start')
+               edgecolors='white', linewidths=1, zorder=10, label='Camera start')
 
     # Dynamic elements
     trail_line, = ax.plot3D([], [], [], color='#FFE66D', linewidth=2.5, alpha=0.8)
     current_dot = ax.scatter([], [], [], color='#FF6B6B', s=80, marker='D',
                              edgecolors='white', linewidths=1.5, zorder=10)
+    person_trail_line, = ax.plot3D([], [], [], color='#4ECDC4', linewidth=2, alpha=0.8)
+    person_current_dot = ax.scatter([], [], [], color='#95E66D', s=70, marker='^',
+                                    edgecolors='white', linewidths=1, zorder=10)
 
     title_text = ax.set_title(title, color='white', fontsize=13, fontweight='bold', pad=15)
 
@@ -180,6 +199,8 @@ def create_trajectory_animation(
     def init():
         trail_line.set_data_3d([], [], [])
         current_dot._offsets3d = ([], [], [])
+        person_trail_line.set_data_3d([], [], [])
+        person_current_dot._offsets3d = ([], [], [])
         return trail_line, current_dot
 
     def update(frame):
@@ -187,15 +208,27 @@ def create_trajectory_animation(
         while len(ax.collections) > 2:
             ax.collections[-1].remove()
 
-        # Trail
+        # Camera trail
         start = max(0, frame - trail_length)
         seg = positions[start:frame + 1]
         trail_line.set_data_3d(seg[:, 0], seg[:, 1], seg[:, 2])
 
-        # Current position
+        # Camera current position
         current_dot._offsets3d = ([positions[frame, 0]],
                                   [positions[frame, 1]],
                                   [positions[frame, 2]])
+
+        # Person trail and current position
+        if person_trajectory is not None:
+            p_start = max(0, frame - trail_length)
+            p_seg = person_trajectory[p_start:frame + 1]
+            person_trail_line.set_data_3d(p_seg[:, 0], p_seg[:, 1], p_seg[:, 2])
+            person_current_dot._offsets3d = ([person_trajectory[frame, 0]],
+                                             [person_trajectory[frame, 1]],
+                                             [person_trajectory[frame, 2]])
+        else:
+            person_trail_line.set_data_3d([], [], [])
+            person_current_dot._offsets3d = ([], [], [])
 
         # Camera frustum
         draw_camera_frustum(ax, positions[frame], directions[frame],
@@ -236,16 +269,24 @@ def create_static_3d_view(
     title: str = "Camera Trajectory (3D)",
     save_path: str = "outputs/trajectory_3d_static.png",
     num_cameras: int = 6,
+    person_trajectory: Optional[np.ndarray] = None,
 ):
     """
     Create a static 3D view with multiple camera frustums along the path.
-    Useful for paper figures.
+    Optionally draw person path in the same figure.
     """
     positions, directions = trajectory_to_positions(traj_data)
     T = len(positions)
 
-    center = positions.mean(axis=0)
-    spread = max(np.ptp(positions, axis=0).max(), 0.5) * 1.2
+    all_pts = positions
+    if person_trajectory is not None:
+        T = min(T, person_trajectory.shape[0])
+        positions = positions[:T]
+        directions = directions[:T]
+        person_trajectory = person_trajectory[:T]
+        all_pts = np.concatenate([positions, person_trajectory], axis=0)
+    center = all_pts.mean(axis=0)
+    spread = max(np.ptp(all_pts, axis=0).max(), 0.5) * 1.2
 
     fig = plt.figure(figsize=(12, 9), facecolor='#1a1a2e')
     ax = fig.add_subplot(111, projection='3d', facecolor='#1a1a2e')
@@ -274,6 +315,18 @@ def create_static_3d_view(
         ax.plot3D(positions[i:i+2, 0], positions[i:i+2, 1], positions[i:i+2, 2],
                   color=color, linewidth=2.5, alpha=0.8)
 
+    # Person path when provided
+    if person_trajectory is not None:
+        for i in range(T - 1):
+            frac = i / T
+            color = plt.cm.viridis(frac)
+            ax.plot3D(person_trajectory[i:i+2, 0], person_trajectory[i:i+2, 1], person_trajectory[i:i+2, 2],
+                      color=color, linewidth=2, alpha=0.7)
+        p_indices = np.linspace(0, T - 1, min(5, T), dtype=int)
+        for idx in p_indices:
+            ax.scatter(*person_trajectory[idx], color='#95E66D', s=40, marker='^',
+                       edgecolors='white', linewidths=1, zorder=9)
+
     # Camera frustums at evenly spaced positions
     indices = np.linspace(0, T - 1, num_cameras, dtype=int)
     for i, idx in enumerate(indices):
@@ -287,9 +340,14 @@ def create_static_3d_view(
 
     # Start / End markers
     ax.scatter(*positions[0], color='#4ECDC4', s=100, marker='o',
-               edgecolors='white', linewidths=2, zorder=10, label='Start')
+               edgecolors='white', linewidths=2, zorder=10, label='Camera start')
     ax.scatter(*positions[-1], color='#FF6B6B', s=100, marker='s',
-               edgecolors='white', linewidths=2, zorder=10, label='End')
+               edgecolors='white', linewidths=2, zorder=10, label='Camera end')
+    if person_trajectory is not None:
+        ax.scatter(*person_trajectory[0], color='#95E66D', s=80, marker='^',
+                   edgecolors='white', linewidths=1.5, zorder=10, label='Person start')
+        ax.scatter(*person_trajectory[-1], color='#C44ECD', s=80, marker='v',
+                   edgecolors='white', linewidths=1.5, zorder=10, label='Person end')
 
     ax.set_title(title, color='white', fontsize=14, fontweight='bold', pad=15)
     ax.legend(loc='upper left', fontsize=9, framealpha=0.3, labelcolor='white')

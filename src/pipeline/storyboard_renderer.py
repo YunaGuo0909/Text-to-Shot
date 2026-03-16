@@ -279,3 +279,69 @@ class TrajectoryRenderer:
         image = Image.open(buf)
         plt.close(fig)
         return image
+
+    def render_camera_and_person_path_topdown(
+        self,
+        shot: GeneratedShot,
+        save_path: Optional[str] = None,
+        camera_trajectory_is_toric: bool = False,
+    ) -> Optional[Image.Image]:
+        """
+        Render camera path and person path in one top-down 2D figure (XY plane, Z up).
+
+        Requires shot.person_trajectory to be set. Camera trajectory is converted to
+        world (tx, ty, tz) when camera_trajectory_is_toric is True.
+        """
+        if shot.person_trajectory is None:
+            return None
+
+        from .camera_view_renderer import _ensure_world_trajectory
+
+        cam_traj = shot.camera_trajectory.trajectory
+        person_traj = shot.person_trajectory
+        T = min(cam_traj.shape[0], person_traj.shape[0])
+        cam_traj = cam_traj[:T]
+        person_traj = person_traj[:T]
+
+        if camera_trajectory_is_toric:
+            cam_world = _ensure_world_trajectory(cam_traj, person_traj, is_toric=True)
+        else:
+            cam_world = cam_traj
+
+        # World 6D: (tx, ty, tz, az, el, roll) -> top-down XY
+        cam_x, cam_y = cam_world[:, 0], cam_world[:, 1]
+        person_x, person_y = person_traj[:, 0], person_traj[:, 1]
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 8), facecolor='#1a1a2e')
+        ax.set_facecolor('#2C3E50')
+
+        ax.plot(cam_x, cam_y, color='#FFE66D', linewidth=2.5, alpha=0.9, label='Camera')
+        ax.scatter(cam_x[0], cam_y[0], color='#4ECDC4', s=120, marker='o', zorder=5,
+                  edgecolors='white', linewidths=2, label='Camera start')
+        ax.scatter(cam_x[-1], cam_y[-1], color='#FF6B6B', s=120, marker='s', zorder=5,
+                  edgecolors='white', linewidths=2, label='Camera end')
+
+        ax.plot(person_x, person_y, color='#4ECDC4', linewidth=2.5, alpha=0.9, label='Person')
+        ax.scatter(person_x[0], person_y[0], color='#95E66D', s=100, marker='^', zorder=5,
+                  edgecolors='white', linewidths=1.5, label='Person start')
+        ax.scatter(person_x[-1], person_y[-1], color='#C44ECD', s=100, marker='v', zorder=5,
+                  edgecolors='white', linewidths=1.5, label='Person end')
+
+        ax.set_xlabel('X', color='white', fontsize=12)
+        ax.set_ylabel('Y', color='white', fontsize=12)
+        ax.set_title('Camera & Person — Top-down (XY)', color='white', fontsize=14, fontweight='bold')
+        ax.tick_params(colors='gray')
+        ax.grid(alpha=0.15)
+        ax.legend(fontsize=9, loc='upper left', framealpha=0.3, labelcolor='white')
+        ax.set_aspect('equal')
+        plt.tight_layout()
+
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+        buf.seek(0)
+        image = Image.open(buf)
+        plt.close(fig)
+        return image
