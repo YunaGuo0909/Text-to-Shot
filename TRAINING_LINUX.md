@@ -114,10 +114,11 @@ python scripts/preprocess_et_data.py --et-root /transfer/et-data --output-root /
 python scripts/filter_et_single_person.py --data-root /transfer/data
 ```
 
-要用单人训练时，改 `configs/default.yaml` 里：
-- `train_index_file: "train_index_single_person.json"`
-- `test_index_file: "test_index_single_person.json"`  
-训练就会读 `/transfer/data/` 下这两个索引。
+要用单人训练时，**无需改配置文件**，加 `--single-person` 即可：
+```bash
+python train.py --config configs/default.yaml --device cuda --single-person
+```
+训练会读 `/transfer/data/train_index_single_person.json`；保存的 checkpoint 里会记下 test 用 `test_index_single_person.json`，评估时也可加 `--single-person` 在单人测试集上评估。
 
 ---
 
@@ -132,8 +133,11 @@ python scripts/filter_et_single_person.py --data-root /transfer/data
 - `checkpoint_final.pth`（训练结束）
 
 ```bash
-# GPU
+# GPU（全量 E.T.）
 python train.py --config configs/default.yaml --device cuda
+
+# 单人子集训练（先完成步骤 5 的 filter）
+python train.py --config configs/default.yaml --device cuda --single-person
 
 # 无 GPU 或快速试跑
 python train.py --config configs/default.yaml --device cpu --no-clip

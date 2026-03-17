@@ -2,9 +2,14 @@
 Person (character) motion trajectory generator.
 
 Produces a simple 3D trajectory (T, 3) from a text description of person motion.
-Rule-based: keywords (walk, run, stand, move left/right, etc.) map to
+Rule-based: keywords (walk, run, stand, move left/right, jump, crouch, etc.) map to
 straight lines, arcs, or static points. Intended for single-person dynamic
 storyboard: person is represented as a cube or point in 3D; no skeletal animation.
+
+Note: This is NOT from the E.T. dataset. E.T. has 3D character trajectories, but
+we do not use them here; this generator is rule-based only. Y-axis was originally
+fixed to 0 (person on a flat floor) as a simplification; we now support jump/crouch/rise
+for vertical motion.
 """
 
 import numpy as np
@@ -36,11 +41,19 @@ def classify_person_motion(description: str) -> str:
     Classify person_motion_description into a motion type for rule-based trajectory.
 
     Returns one of: static, walk_forward, walk_backward, walk_left, walk_right,
-    run_forward, move_left, move_right, turn, arc_left, arc_right.
+    run_forward, move_left, move_right, turn, arc_left, arc_right,
+    jump, crouch, stand_up.
     """
     if not description or not description.strip():
         return "static"
     text = description.lower().strip()
+
+    if "jump" in text:
+        return "jump"
+    if "crouch" in text or "sit" in text or "kneel" in text:
+        return "crouch"
+    if "stand up" in text or "rise" in text or "get up" in text:
+        return "stand_up"
 
     if "stand" in text or "still" in text or "static" in text or "stays" in text or "remain" in text:
         return "static"
@@ -92,8 +105,9 @@ class PersonTrajectoryGenerator:
     "in front" of default camera. So person moving "forward" can be +Z or +Y depending
     on project convention. From camera_trajectory and typical 3D: often X right, Y up, Z
     toward scene. So "person walks toward camera" = person moves in -Z. "Person walks
-    forward" (into scene) = +Z. We'll use: X right, Y up, Z forward (into scene).
+    forward" (into scene) = +Z.     We'll use: X right, Y up, Z forward (into scene).
     Walk forward -> +Z, walk backward -> -Z, walk left -> -X, walk right -> +X.
+    Y was fixed to 0 (flat floor) as a simplification; jump/crouch/stand_up add vertical motion.
     """
 
     def __init__(
@@ -168,6 +182,26 @@ class PersonTrajectoryGenerator:
                 np.zeros(T),
                 np.cos(theta) - 1.0,
             ], axis=1)
+            return traj.astype(np.float32)
+
+        # Y-axis motion (vertical)
+        if motion_type == "jump":
+            # Parabolic jump: up then down, same XZ
+            y_scale = self.motion_scale * 0.6
+            y = 4 * y_scale * t * (1 - t)  # peak at t=0.5
+            traj = self.origin + np.stack([np.zeros(T), y, np.zeros(T)], axis=1)
+            return traj.astype(np.float32)
+        if motion_type == "crouch":
+            # Y decreases (e.g. sit down)
+            y_scale = self.motion_scale * 0.4
+            y = -_normalized_lerp(t, "ease-in-out") * y_scale
+            traj = self.origin + np.stack([np.zeros(T), y, np.zeros(T)], axis=1)
+            return traj.astype(np.float32)
+        if motion_type == "stand_up":
+            # Y increases (e.g. stand up from sit)
+            y_scale = self.motion_scale * 0.4
+            y = _normalized_lerp(t, "ease-out") * y_scale
+            traj = self.origin + np.stack([np.zeros(T), y, np.zeros(T)], axis=1)
             return traj.astype(np.float32)
 
         return np.tile(self.origin, (T, 1)).astype(np.float32)

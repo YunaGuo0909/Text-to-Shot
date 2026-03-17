@@ -93,7 +93,7 @@ PYTHONPATH=. python scripts/filter_et_single_person.py --et-root /transfer/et-da
 PYTHONPATH=. python scripts/filter_et_single_person.py --data-root data --keep-unknown
 ```
 
-Outputs: `data/train_index_single_person.json`, `data/test_index_single_person.json`. Point your training data loader at these index files to use the single-person subset.
+Outputs: `data/train_index_single_person.json`, `data/test_index_single_person.json`. To **train** on the single-person subset, run training with `--single-person` (no config edit needed). To use the config file instead, set `train_index_file` and `test_index_file` in `configs/default.yaml` to these filenames.
 
 ---
 
@@ -248,6 +248,9 @@ Each `.npy` file contains a `(48, 6)` float32 NumPy array.
 # With CLIP text conditioning
 PYTHONPATH=. python train.py --config configs/default.yaml --device cuda
 
+# Train on E.T. single-person subset (after running filter_et_single_person.py)
+PYTHONPATH=. python train.py --config configs/default.yaml --device cuda --single-person
+
 # Without CLIP (random embeddings, for quick testing)
 PYTHONPATH=. python train.py --config configs/default.yaml --device cuda --no-clip
 
@@ -297,6 +300,9 @@ Outputs: parameter curves (PNG) + 3D animation (GIF) + 3D static view (PNG).
 
 ```bash
 PYTHONPATH=. python evaluate.py --checkpoint checkpoints/checkpoint_final.pth --device cuda
+
+# Evaluate on single-person test set (after filtering)
+PYTHONPATH=. python evaluate.py --checkpoint checkpoints/checkpoint_final.pth --device cuda --single-person
 ```
 
 | Metric | Description |

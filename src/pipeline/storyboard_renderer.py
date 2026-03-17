@@ -287,10 +287,10 @@ class TrajectoryRenderer:
         camera_trajectory_is_toric: bool = False,
     ) -> Optional[Image.Image]:
         """
-        Render camera path and person path in one top-down 2D figure (XY plane, Z up).
+        Render camera path and person path in one 2D figure (XZ plane).
 
-        Requires shot.person_trajectory to be set. Camera trajectory is converted to
-        world (tx, ty, tz) when camera_trajectory_is_toric is True.
+        Person trajectory has y=0 and moves in X,Z; camera (tx,ty,tz) is in same world.
+        We plot XZ so both camera and person show visible 2D paths in the same view.
         """
         if shot.person_trajectory is None:
             return None
@@ -308,28 +308,28 @@ class TrajectoryRenderer:
         else:
             cam_world = cam_traj
 
-        # World 6D: (tx, ty, tz, az, el, roll) -> top-down XY
-        cam_x, cam_y = cam_world[:, 0], cam_world[:, 1]
-        person_x, person_y = person_traj[:, 0], person_traj[:, 1]
+        # World: camera (tx, ty, tz), person (x, y, z). Person moves in XZ (y=0). Plot XZ so both paths are visible.
+        cam_x, cam_z = cam_world[:, 0], cam_world[:, 2]
+        person_x, person_z = person_traj[:, 0], person_traj[:, 2]
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 8), facecolor='#1a1a2e')
         ax.set_facecolor('#2C3E50')
 
-        ax.plot(cam_x, cam_y, color='#FFE66D', linewidth=2.5, alpha=0.9, label='Camera')
-        ax.scatter(cam_x[0], cam_y[0], color='#4ECDC4', s=120, marker='o', zorder=5,
+        ax.plot(cam_x, cam_z, color='#FFE66D', linewidth=2.5, alpha=0.9, label='Camera')
+        ax.scatter(cam_x[0], cam_z[0], color='#4ECDC4', s=120, marker='o', zorder=5,
                   edgecolors='white', linewidths=2, label='Camera start')
-        ax.scatter(cam_x[-1], cam_y[-1], color='#FF6B6B', s=120, marker='s', zorder=5,
+        ax.scatter(cam_x[-1], cam_z[-1], color='#FF6B6B', s=120, marker='s', zorder=5,
                   edgecolors='white', linewidths=2, label='Camera end')
 
-        ax.plot(person_x, person_y, color='#4ECDC4', linewidth=2.5, alpha=0.9, label='Person')
-        ax.scatter(person_x[0], person_y[0], color='#95E66D', s=100, marker='^', zorder=5,
+        ax.plot(person_x, person_z, color='#4ECDC4', linewidth=2.5, alpha=0.9, label='Person')
+        ax.scatter(person_x[0], person_z[0], color='#95E66D', s=100, marker='^', zorder=5,
                   edgecolors='white', linewidths=1.5, label='Person start')
-        ax.scatter(person_x[-1], person_y[-1], color='#C44ECD', s=100, marker='v', zorder=5,
+        ax.scatter(person_x[-1], person_z[-1], color='#C44ECD', s=100, marker='v', zorder=5,
                   edgecolors='white', linewidths=1.5, label='Person end')
 
         ax.set_xlabel('X', color='white', fontsize=12)
-        ax.set_ylabel('Y', color='white', fontsize=12)
-        ax.set_title('Camera & Person — Top-down (XY)', color='white', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Z', color='white', fontsize=12)
+        ax.set_title('Camera & Person — Same Figure (XZ plane)', color='white', fontsize=14, fontweight='bold')
         ax.tick_params(colors='gray')
         ax.grid(alpha=0.15)
         ax.legend(fontsize=9, loc='upper left', framealpha=0.3, labelcolor='white')

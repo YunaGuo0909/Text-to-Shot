@@ -145,13 +145,17 @@ def evaluate(args):
         except Exception as e:
             print(f"CLIP unavailable ({e}), using random embeddings.")
 
-    # Test dataset (index_file: full or single-person subset from config)
+    # Test dataset (index_file: full or single-person subset)
+    test_index_file = config['data'].get('test_index_file', 'test_index.json')
+    if getattr(args, 'single_person', False):
+        test_index_file = 'test_index_single_person.json'
+        print("Using E.T. single-person test set: test_index_single_person.json")
     test_dataset = CameraTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='test',
         num_frames=num_frames,
         toric_dim=toric_dim,
-        index_file=config['data'].get('test_index_file'),
+        index_file=test_index_file,
     )
 
     test_loader = DataLoader(
@@ -243,6 +247,8 @@ def main():
                         help='Number of samples per prompt (for diversity)')
     parser.add_argument('--no-clip', action='store_true',
                         help='Use random text embeddings')
+    parser.add_argument('--single-person', action='store_true',
+                        help='Evaluate on E.T. single-person test set (test_index_single_person.json)')
     args = parser.parse_args()
     evaluate(args)
 

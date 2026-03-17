@@ -26,6 +26,8 @@ def parse_args():
                         help='Device to train on')
     parser.add_argument('--no-clip', action='store_true',
                         help='Use random text embeddings instead of CLIP (for testing)')
+    parser.add_argument('--single-person', action='store_true',
+                        help='Use E.T. single-person subset (train_index_single_person.json, test_index_single_person.json)')
     return parser.parse_args()
 
 
@@ -53,7 +55,7 @@ def build_text_encoder(config, device, use_clip=True):
         return None
 
 
-def train(config, device, use_clip=True):
+def train(config, device, use_clip=True, single_person=False):
     """Main training loop."""
 
     model_cfg = config['model']
@@ -94,13 +96,19 @@ def train(config, device, use_clip=True):
         start_epoch = ckpt.get('epoch', 0)
         print(f"Resumed from epoch {start_epoch}")
 
-    # Create dataset and dataloader (index_file: use full set or single-person subset from config)
+    # Create dataset and dataloader (index_file: full set or single-person subset)
+    train_index = config['data'].get('train_index_file', 'train_index.json')
+    if single_person:
+        train_index = 'train_index_single_person.json'
+        config['data']['train_index_file'] = train_index
+        config['data']['test_index_file'] = 'test_index_single_person.json'
+        print("Using E.T. single-person subset: train_index_single_person.json")
     dataset = CameraTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='train',
         num_frames=traj_cfg['default_num_frames'],
         toric_dim=model_cfg['toric_dim'],
-        index_file=config['data'].get('train_index_file'),
+        index_file=train_index,
     )
 
     dataloader = DataLoader(
@@ -211,4 +219,4 @@ if __name__ == '__main__':
     device = args.device if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    train(config, device, use_clip=not args.no_clip)
+    train(config, device, use_clip=not args.no_clip, single_person=args.single_person)
