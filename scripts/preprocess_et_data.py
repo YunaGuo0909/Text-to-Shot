@@ -80,13 +80,36 @@ def load_person_joints(joints_dir: str, sample_id: str):
     """
     Load person root position from E.T. dataset character data.
 
-    E.T. dataset has smplh/ directory with SMPL-H parameters per sample.
-    We extract the root translation (trans) as (T, 3).
+    E.T. smplh/ files are .pkl (pickle) dicts with torch.Tensor values:
+        betas, global_orient, body_pose, left_hand_pose, right_hand_pose, transl
 
-    Also tries: char/, joints/, body/ directories with .npy/.npz files.
+    We extract 'transl' as (T, 3) root translation in world space.
+
+    Also supports .npy/.npz formats as fallback.
     Returns (T, 3) root positions or None.
     """
-    # Try .npy first (most common in E.T.)
+    import torch
+
+    # === Try .pkl first (E.T. smplh/ format) ===
+    pkl_path = os.path.join(joints_dir, f'{sample_id}.pkl')
+    if os.path.exists(pkl_path):
+        try:
+            import pickle
+            with open(pkl_path, 'rb') as f:
+                data = pickle.load(f)
+            if isinstance(data, dict) and 'transl' in data:
+                transl = data['transl']
+                if isinstance(transl, torch.Tensor):
+                    transl = transl.cpu().numpy()
+                transl = np.array(transl, dtype=np.float32)
+                if transl.ndim == 2 and transl.shape[1] >= 3:
+                    return transl[:, :3]
+                elif transl.ndim == 1 and transl.shape[0] >= 3:
+                    return transl[:3].reshape(1, 3)
+        except Exception:
+            pass
+
+    # === Fallback: .npy / .npz ===
     for ext in ['.npy', '.npz']:
         path = os.path.join(joints_dir, f'{sample_id}{ext}')
         if not os.path.exists(path):
@@ -94,45 +117,26 @@ def load_person_joints(joints_dir: str, sample_id: str):
         try:
             if ext == '.npy':
                 data = np.load(path, allow_pickle=True)
-                # Handle dict-like .npy (saved with allow_pickle)
                 if data.ndim == 0:
                     data = data.item()
-                    if isinstance(data, dict):
-                        # SMPL-H format: look for 'trans' (root translation)
-                        for key in ['trans', 'transl', 'root_translation', 'root_orient']:
-                            if key in data:
-                                arr = np.array(data[key], dtype=np.float32)
-                                if arr.ndim == 2 and arr.shape[1] >= 3:
-                                    return arr[:, :3]
-                        # Fallback: 'joints' or 'body_pose'
-                        for key in ['joints', 'positions', 'vertices']:
-                            if key in data:
-                                arr = np.array(data[key], dtype=np.float32)
-                                if arr.ndim == 3:
-                                    return arr[:, 0, :3]  # root joint
-                    continue
-                # Regular ndarray
-                if data.ndim >= 2 and data.shape[-1] >= 3:
-                    if data.ndim == 3:
-                        return data[:, 0, :3].astype(np.float32)
-                    else:
+                if isinstance(data, dict):
+                    for key in ['transl', 'trans', 'root_translation']:
+                        if key in data:
+                            arr = np.array(data[key], dtype=np.float32)
+                            if isinstance(data[key], torch.Tensor):
+                                arr = data[key].cpu().numpy().astype(np.float32)
+                            if arr.ndim == 2 and arr.shape[1] >= 3:
+                                return arr[:, :3]
+                elif isinstance(data, np.ndarray):
+                    if data.ndim >= 2 and data.shape[-1] >= 3:
+                        if data.ndim == 3:
+                            return data[:, 0, :3].astype(np.float32)
                         return data[:, :3].astype(np.float32)
             elif ext == '.npz':
                 data = np.load(path)
-                # SMPL-H .npz: typically has 'trans' for root translation
-                for key in ['trans', 'transl', 'root_translation']:
-                    if key in data:
-                        arr = data[key]
-                        if arr.ndim == 2 and arr.shape[1] >= 3:
-                            return arr[:, :3].astype(np.float32)
-                # Fallback: joint positions
-                for key in ['joints', 'positions', 'root', 'body']:
-                    if key in data:
-                        arr = data[key]
-                        if arr.ndim == 3:
-                            return arr[:, 0, :3].astype(np.float32)
-                        elif arr.ndim == 2:
-                            return arr[:, :3].astype(np.float32)
+                for key in ['transl', 'trans', 'root_translation']:
+                    if key in data and data[key].ndim == 2:
+                        return data[key][:, :3].astype(np.float32)
         except Exception:
             continue
     return None
