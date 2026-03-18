@@ -257,7 +257,7 @@ def main():
     if not args.data_root and not args.et_root:
         args.data_root = "/transfer/stc-data"
 
-    print("Filter E.T. to single-person subset")
+    print("Filter E.T. to single-person subset (required for joint person-camera training)")
     print("=" * 50)
 
     if args.data_root:

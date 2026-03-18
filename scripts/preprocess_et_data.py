@@ -78,33 +78,63 @@ def load_camera_trajectory(traj_path: str):
 
 def load_person_joints(joints_dir: str, sample_id: str):
     """
-    Try to load person position data from E.T. dataset.
+    Load person root position from E.T. dataset character data.
+
+    E.T. dataset has smplh/ directory with SMPL-H parameters per sample.
+    We extract the root translation (trans) as (T, 3).
+
+    Also tries: char/, joints/, body/ directories with .npy/.npz files.
     Returns (T, 3) root positions or None.
     """
-    # Try common file patterns
-    for ext in ['.npy', '.npz', '.txt']:
+    # Try .npy first (most common in E.T.)
+    for ext in ['.npy', '.npz']:
         path = os.path.join(joints_dir, f'{sample_id}{ext}')
-        if os.path.exists(path):
-            try:
-                if ext == '.npy':
-                    data = np.load(path)
-                    if data.ndim >= 2 and data.shape[-1] >= 3:
-                        # Take root joint (first joint or first 3 dims)
-                        if data.ndim == 3:
-                            return data[:, 0, :3].astype(np.float32)
-                        else:
-                            return data[:, :3].astype(np.float32)
-                elif ext == '.npz':
-                    data = np.load(path)
-                    for key in ['joints', 'positions', 'root', 'body']:
-                        if key in data:
-                            arr = data[key]
-                            if arr.ndim == 3:
-                                return arr[:, 0, :3].astype(np.float32)
-                            elif arr.ndim == 2:
-                                return arr[:, :3].astype(np.float32)
-            except Exception:
-                continue
+        if not os.path.exists(path):
+            continue
+        try:
+            if ext == '.npy':
+                data = np.load(path, allow_pickle=True)
+                # Handle dict-like .npy (saved with allow_pickle)
+                if data.ndim == 0:
+                    data = data.item()
+                    if isinstance(data, dict):
+                        # SMPL-H format: look for 'trans' (root translation)
+                        for key in ['trans', 'transl', 'root_translation', 'root_orient']:
+                            if key in data:
+                                arr = np.array(data[key], dtype=np.float32)
+                                if arr.ndim == 2 and arr.shape[1] >= 3:
+                                    return arr[:, :3]
+                        # Fallback: 'joints' or 'body_pose'
+                        for key in ['joints', 'positions', 'vertices']:
+                            if key in data:
+                                arr = np.array(data[key], dtype=np.float32)
+                                if arr.ndim == 3:
+                                    return arr[:, 0, :3]  # root joint
+                    continue
+                # Regular ndarray
+                if data.ndim >= 2 and data.shape[-1] >= 3:
+                    if data.ndim == 3:
+                        return data[:, 0, :3].astype(np.float32)
+                    else:
+                        return data[:, :3].astype(np.float32)
+            elif ext == '.npz':
+                data = np.load(path)
+                # SMPL-H .npz: typically has 'trans' for root translation
+                for key in ['trans', 'transl', 'root_translation']:
+                    if key in data:
+                        arr = data[key]
+                        if arr.ndim == 2 and arr.shape[1] >= 3:
+                            return arr[:, :3].astype(np.float32)
+                # Fallback: joint positions
+                for key in ['joints', 'positions', 'root', 'body']:
+                    if key in data:
+                        arr = data[key]
+                        if arr.ndim == 3:
+                            return arr[:, 0, :3].astype(np.float32)
+                        elif arr.ndim == 2:
+                            return arr[:, :3].astype(np.float32)
+        except Exception:
+            continue
     return None
 
 
@@ -184,14 +214,17 @@ def main():
     caption_dir = os.path.join(et_root, 'caption')
     caption_cam_dir = os.path.join(et_root, 'caption_cam')
 
-    # Look for person joint data
+    # Look for person joint/character data (E.T. has smplh/ and char/)
     joints_dir = None
-    for candidate in ['joints', 'body', 'smpl', 'character', 'motion']:
+    for candidate in ['smplh', 'char', 'joints', 'body', 'smpl', 'character', 'motion']:
         d = os.path.join(et_root, candidate)
         if os.path.isdir(d):
-            joints_dir = d
-            print(f"Found person data directory: {d}")
-            break
+            # Verify it has actual files
+            entries = os.listdir(d)
+            if len(entries) > 0:
+                joints_dir = d
+                print(f"Found person data directory: {d} ({len(entries)} entries)")
+                break
     if joints_dir is None:
         print("No person joint directory found. Will estimate person position from camera look-at.")
 
