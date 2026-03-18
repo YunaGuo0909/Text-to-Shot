@@ -235,8 +235,8 @@ def main():
     parser.add_argument(
         "--output-root",
         type=str,
-        default="/transfer/data",
-        help="Output directory for filtered index files (default: /transfer/data).",
+        default="/transfer/stc-data",
+        help="Output directory for filtered index files (default: /transfer/stc-data).",
     )
     parser.add_argument(
         "--output-suffix",
@@ -255,7 +255,7 @@ def main():
         print("Use either --data-root or --et-root, not both.")
         return
     if not args.data_root and not args.et_root:
-        args.data_root = "/transfer/data"
+        args.data_root = "/transfer/stc-data"
 
     print("Filter E.T. to single-person subset")
     print("=" * 50)

@@ -1,17 +1,17 @@
 """
-Camera Trajectory Denoiser Network.
+Joint Person-Camera Trajectory Denoiser.
 
-A temporal Transformer-based denoiser that predicts clean camera trajectories
-in Toric parameter space from noisy inputs. Conditioned on text embeddings,
-shot type, and camera motion type via FiLM modulation.
+Dual-branch Transformer that jointly denoises person root trajectory (T, 3)
+and camera trajectory (T, 6) with cross-attention between branches.
 
-The network processes per-frame Toric states (6-dim) through temporal
-self-attention layers, enabling it to learn smooth, cinematographically
-plausible camera motions.
+The person branch and camera branch each have self-attention for temporal
+coherence, plus cross-attention so camera motion is aware of person motion
+and vice versa. Both branches are conditioned on text (CLIP), diffusion
+timestep, shot type, and camera motion type via FiLM modulation.
 
 Reference:
 - Tevet, G., et al. (2022). Human Motion Diffusion Model (MDM). ICLR.
-- Wang, Z., et al. (2024). DanceCamera3D. AAAI.
+- Ho, J., et al. (2020). Denoising Diffusion Probabilistic Models. NeurIPS.
 """
 
 import torch
@@ -37,82 +37,122 @@ class SinusoidalPositionEmbedding(nn.Module):
         return emb
 
 
-class TemporalTransformerBlock(nn.Module):
+class DualBranchBlock(nn.Module):
     """
-    Transformer block with FiLM conditioning for temporal sequences.
+    One layer of the dual-branch Transformer.
 
-    Applies multi-head self-attention across the time dimension,
-    followed by a FiLM-conditioned feed-forward network.
+    Each branch (person, camera) has:
+    1. Self-attention over time
+    2. Cross-attention to the other branch
+    3. FiLM-conditioned feed-forward network
     """
 
     def __init__(self, hidden_dim, condition_dim, num_heads=4, ff_mult=4, dropout=0.1):
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_dim)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.norm2 = nn.LayerNorm(hidden_dim)
-        self.ff = nn.Sequential(
+
+        # Person branch
+        self.person_norm1 = nn.LayerNorm(hidden_dim)
+        self.person_self_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.person_norm2 = nn.LayerNorm(hidden_dim)
+        self.person_cross_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.person_norm3 = nn.LayerNorm(hidden_dim)
+        self.person_ff = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * ff_mult),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim * ff_mult, hidden_dim),
             nn.Dropout(dropout),
         )
-        self.film = FiLMLayer(hidden_dim, condition_dim)
+        self.person_film = FiLMLayer(hidden_dim, condition_dim)
 
-    def forward(self, x, condition):
+        # Camera branch
+        self.camera_norm1 = nn.LayerNorm(hidden_dim)
+        self.camera_self_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.camera_norm2 = nn.LayerNorm(hidden_dim)
+        self.camera_cross_attn = nn.MultiheadAttention(
+            hidden_dim, num_heads, dropout=dropout, batch_first=True)
+        self.camera_norm3 = nn.LayerNorm(hidden_dim)
+        self.camera_ff = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * ff_mult),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * ff_mult, hidden_dim),
+            nn.Dropout(dropout),
+        )
+        self.camera_film = FiLMLayer(hidden_dim, condition_dim)
+
+    def forward(self, person_h, camera_h, condition):
         """
         Args:
-            x: (batch, T, hidden_dim) temporal features
-            condition: (batch, condition_dim) conditioning signal
+            person_h: (B, T, H) person branch features
+            camera_h: (B, T, H) camera branch features
+            condition: (B, C) conditioning vector
 
         Returns:
-            (batch, T, hidden_dim) updated features
+            person_h, camera_h: updated features
         """
-        B, T, D = x.shape
+        B, T, H = person_h.shape
 
-        # Self-attention with residual
-        h = self.norm1(x)
-        h, _ = self.attn(h, h, h)
-        x = x + h
+        # --- Person branch ---
+        # Self-attention
+        h = self.person_norm1(person_h)
+        h, _ = self.person_self_attn(h, h, h)
+        person_h = person_h + h
 
-        # FiLM-conditioned feed-forward with residual
-        h = self.norm2(x)
-        h = self.ff(h)
-        # Apply FiLM per frame
-        h = h.reshape(B * T, D)
-        cond_expanded = condition.unsqueeze(1).expand(-1, T, -1).reshape(B * T, -1)
-        h = self.film(h, cond_expanded)
-        h = h.reshape(B, T, D)
-        x = x + h
+        # Cross-attention (person attends to camera)
+        h = self.person_norm2(person_h)
+        cam_kv = self.camera_norm2(camera_h)
+        h, _ = self.person_cross_attn(h, cam_kv, cam_kv)
+        person_h = person_h + h
 
-        return x
+        # FiLM-conditioned FFN
+        h = self.person_norm3(person_h)
+        h = self.person_ff(h)
+        h = h.reshape(B * T, H)
+        cond_exp = condition.unsqueeze(1).expand(-1, T, -1).reshape(B * T, -1)
+        h = self.person_film(h, cond_exp)
+        person_h = person_h + h.reshape(B, T, H)
+
+        # --- Camera branch ---
+        # Self-attention
+        h = self.camera_norm1(camera_h)
+        h, _ = self.camera_self_attn(h, h, h)
+        camera_h = camera_h + h
+
+        # Cross-attention (camera attends to person)
+        h = self.camera_norm2(camera_h)
+        per_kv = self.person_norm2(person_h)
+        h, _ = self.camera_cross_attn(h, per_kv, per_kv)
+        camera_h = camera_h + h
+
+        # FiLM-conditioned FFN
+        h = self.camera_norm3(camera_h)
+        h = self.camera_ff(h)
+        h = h.reshape(B * T, H)
+        h = self.camera_film(h, cond_exp)
+        camera_h = camera_h + h.reshape(B, T, H)
+
+        return person_h, camera_h
 
 
-class CameraTrajectoryDenoiser(nn.Module):
+class JointTrajectoryDenoiser(nn.Module):
     """
-    Denoiser for camera trajectory generation in Toric space.
+    Dual-branch denoiser for joint person-camera trajectory generation.
 
-    Generates smooth camera motion trajectories conditioned on textual
-    scene descriptions, shot types, and camera motion types.
+    Takes a noisy joint trajectory y_t = [person_flat, camera_flat] and
+    predicts the clean trajectory y_0. Person branch (T, 3) and camera
+    branch (T, 6) interact via cross-attention at every layer.
 
-    Architecture:
-    1. Per-frame linear projection from Toric space (6-dim) to hidden space
-    2. Learnable temporal positional encoding
-    3. N Transformer blocks with FiLM conditioning
-    4. Per-frame linear projection back to Toric space
-
-    Input/Output: flattened trajectory (batch, num_frames * toric_dim)
-    Internally reshaped to (batch, num_frames, toric_dim) for temporal processing.
+    Input/Output: flattened joint vector (B, T*person_dim + T*camera_dim)
     """
 
     def __init__(
         self,
-        toric_dim=6,
+        person_dim=3,
+        camera_dim=6,
         num_frames=48,
         hidden_dim=256,
         num_layers=6,
@@ -125,27 +165,15 @@ class CameraTrajectoryDenoiser(nn.Module):
         motion_type_dim=64,
         dropout=0.1,
     ):
-        """
-        Args:
-            toric_dim: Dimension of Toric camera state (6)
-            num_frames: Number of trajectory frames
-            hidden_dim: Hidden dimension for Transformer
-            num_layers: Number of Transformer blocks
-            num_heads: Number of attention heads
-            text_dim: Dimension of text embedding (CLIP)
-            timestep_dim: Dimension of diffusion timestep embedding
-            num_shot_types: Number of shot type categories
-            shot_type_dim: Dimension of shot type embedding
-            num_motion_types: Number of camera motion type categories
-            motion_type_dim: Dimension of motion type embedding
-            dropout: Dropout rate
-        """
         super().__init__()
-        self.toric_dim = toric_dim
+        self.person_dim = person_dim
+        self.camera_dim = camera_dim
         self.num_frames = num_frames
-        self.total_dim = toric_dim * num_frames
+        self.person_total = person_dim * num_frames
+        self.camera_total = camera_dim * num_frames
+        self.total_dim = self.person_total + self.camera_total
 
-        # Conditioning dimensions
+        # Conditioning
         condition_dim = text_dim + timestep_dim + shot_type_dim + motion_type_dim
 
         # Timestep embedding
@@ -164,19 +192,19 @@ class CameraTrajectoryDenoiser(nn.Module):
         self.motion_type_embed = nn.Embedding(num_motion_types, motion_type_dim)
         self.no_motion_type = nn.Parameter(torch.zeros(motion_type_dim))
 
-        # Per-frame input/output projections
-        self.input_proj = nn.Linear(toric_dim, hidden_dim)
-        self.output_proj = nn.Linear(hidden_dim, toric_dim)
+        # Per-frame input projections
+        self.person_input_proj = nn.Linear(person_dim, hidden_dim)
+        self.camera_input_proj = nn.Linear(camera_dim, hidden_dim)
 
-        # Learnable temporal positional encoding
+        # Shared temporal positional encoding
         self.temporal_pe = nn.Parameter(torch.randn(1, num_frames, hidden_dim) * 0.02)
 
-        # Condition projection into hidden space (injected at input)
+        # Condition projection (injected as bias)
         self.cond_proj = nn.Linear(condition_dim, hidden_dim)
 
-        # Temporal Transformer blocks
+        # Dual-branch Transformer blocks
         self.blocks = nn.ModuleList([
-            TemporalTransformerBlock(
+            DualBranchBlock(
                 hidden_dim=hidden_dim,
                 condition_dim=condition_dim,
                 num_heads=num_heads,
@@ -185,29 +213,38 @@ class CameraTrajectoryDenoiser(nn.Module):
             for _ in range(num_layers)
         ])
 
-        self.final_norm = nn.LayerNorm(hidden_dim)
+        # Output projections
+        self.person_final_norm = nn.LayerNorm(hidden_dim)
+        self.camera_final_norm = nn.LayerNorm(hidden_dim)
+        self.person_output_proj = nn.Linear(hidden_dim, person_dim)
+        self.camera_output_proj = nn.Linear(hidden_dim, camera_dim)
 
     def forward(self, y_t, t, text_embed, shot_type=None, motion_type=None):
         """
-        Predict clean trajectory y_0 from noisy y_t.
+        Predict clean joint trajectory y_0 from noisy y_t.
 
         Args:
-            y_t: Noisy trajectory (batch, total_dim) where total_dim = num_frames * toric_dim
-            t: Diffusion timestep (batch,)
-            text_embed: Text embedding (batch, text_dim)
-            shot_type: Shot type index (batch,) or None
-            motion_type: Camera motion type index (batch,) or None
+            y_t: (B, total_dim) noisy joint trajectory
+                 [person_flat (T*3), camera_flat (T*6)]
+            t: (B,) diffusion timestep
+            text_embed: (B, text_dim)
+            shot_type: (B,) or None
+            motion_type: (B,) or None
 
         Returns:
-            y_0_pred: Predicted clean trajectory (batch, total_dim)
+            y_0_pred: (B, total_dim) predicted clean joint trajectory
         """
         B = y_t.shape[0]
 
-        # Reshape to per-frame representation
-        x = y_t.reshape(B, self.num_frames, self.toric_dim)  # (B, T, 6)
+        # Split into person and camera
+        person_flat = y_t[:, :self.person_total]
+        camera_flat = y_t[:, self.person_total:]
 
-        # Build conditioning signal
-        t_emb = self.timestep_proj(self.timestep_embed(t))  # (B, timestep_dim)
+        person_x = person_flat.reshape(B, self.num_frames, self.person_dim)
+        camera_x = camera_flat.reshape(B, self.num_frames, self.camera_dim)
+
+        # Build conditioning
+        t_emb = self.timestep_proj(self.timestep_embed(t))
 
         if shot_type is not None:
             s_emb = self.shot_type_embed(shot_type)
@@ -219,23 +256,25 @@ class CameraTrajectoryDenoiser(nn.Module):
         else:
             m_emb = self.no_motion_type.unsqueeze(0).expand(B, -1)
 
-        condition = torch.cat([text_embed, t_emb, s_emb, m_emb], dim=-1)  # (B, cond_dim)
+        condition = torch.cat([text_embed, t_emb, s_emb, m_emb], dim=-1)
 
-        # Per-frame encoding + temporal position + global condition token
-        h = self.input_proj(x)  # (B, T, hidden)
-        h = h + self.temporal_pe[:, :self.num_frames, :]
+        # Project to hidden space + temporal PE + condition bias
+        cond_bias = self.cond_proj(condition).unsqueeze(1)
+        pe = self.temporal_pe[:, :self.num_frames, :]
 
-        # Add condition as a bias to all frames
-        cond_bias = self.cond_proj(condition).unsqueeze(1)  # (B, 1, hidden)
-        h = h + cond_bias
+        person_h = self.person_input_proj(person_x) + pe + cond_bias
+        camera_h = self.camera_input_proj(camera_x) + pe + cond_bias
 
-        # Temporal Transformer blocks
+        # Dual-branch Transformer
         for block in self.blocks:
-            h = block(h, condition)
+            person_h, camera_h = block(person_h, camera_h, condition)
 
         # Decode
-        h = self.final_norm(h)
-        y_0_pred = self.output_proj(h)  # (B, T, 6)
+        person_out = self.person_output_proj(self.person_final_norm(person_h))
+        camera_out = self.camera_output_proj(self.camera_final_norm(camera_h))
 
-        # Flatten back
-        return y_0_pred.reshape(B, self.total_dim)
+        # Flatten and concatenate
+        person_flat = person_out.reshape(B, self.person_total)
+        camera_flat = camera_out.reshape(B, self.camera_total)
+
+        return torch.cat([person_flat, camera_flat], dim=-1)

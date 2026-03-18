@@ -1,14 +1,17 @@
 # ============================================================
-# Script-to-Camera: Camera Trajectory Generation — Configuration
+# Script-to-Camera (STC): Joint Person-Camera Trajectory Generation
+# Single-person scene — dual-branch diffusion with cross-attention
 # ============================================================
 
 # --- Model Architecture ---
 model:
-  # Toric camera state dimension (pA_x, pA_y, pB_x, pB_y, theta, phi)
-  toric_dim: 6
-  # Hidden dimension for Transformer
+  # Camera state: (tx, ty, tz, azimuth, elevation, roll)
+  camera_dim: 6
+  # Person root trajectory: (px, py, pz)
+  person_dim: 3
+  # Hidden dimension for dual-branch Transformer
   hidden_dim: 256
-  # Number of Transformer layers
+  # Number of dual-branch Transformer layers
   num_layers: 6
   # Number of attention heads
   num_heads: 4
@@ -17,21 +20,15 @@ model:
 
 # --- Diffusion Settings ---
 diffusion:
-  # Number of diffusion timesteps
   num_timesteps: 1000
-  # Beta schedule type: linear, cosine
   beta_schedule: cosine
-  # Beta range (for linear schedule)
   beta_start: 0.0001
   beta_end: 0.02
 
 # --- Text Encoder ---
 text_encoder:
-  # CLIP model name
   model_name: "openai/clip-vit-base-patch32"
-  # Maximum text length
   max_length: 77
-  # Freeze text encoder
   freeze: true
 
 # --- Shot Type Settings ---
@@ -44,11 +41,11 @@ shot_types:
     - "two-shot"
   embedding_dim: 64
 
-# --- Camera Trajectory ---
+# --- Trajectory ---
 trajectory:
   # Default trajectory length in frames (at 24fps → 2 seconds)
   default_num_frames: 48
-  # Available camera motion types
+  # Camera motion types (used for conditioning)
   motion_types:
     - "static"
     - "dolly-in"
@@ -59,18 +56,7 @@ trajectory:
     - "crane-down"
     - "track"
     - "orbit"
-  # Motion type embedding dimension
   motion_type_dim: 64
-  # Interpolation method: cubic-spline
-  interpolation: cubic-spline
-  # Default motion intensity (1.0 = normal)
-  default_intensity: 1.0
-
-# --- Person Trajectory (single-person dynamic storyboard) ---
-person_trajectory:
-  enabled: true
-  num_frames: 48  # match trajectory default_num_frames
-  motion_scale: 0.5  # world units for rule-based motion magnitude
 
 # --- Training ---
 training:
@@ -85,29 +71,19 @@ training:
   eval_interval: 10
 
 # --- Data ---
-# Use train_index.json (full/uncertain set) or train_index_single_person.json (single-person subset).
-# Default: preprocess 输出到 /transfer/data，训练从这里读。
 data:
-  dataset_name: "shotdeck-camera"
-  data_root: "/transfer/data"
-  train_index_file: "train_index.json"       # or "train_index_single_person.json" for single-person training
-  test_index_file: "test_index.json"        # or "test_index_single_person.json"
+  # E.T. dataset root (downloaded by scripts/download_et_data.py)
+  et_data_root: "/transfer/et-data"
+  # Preprocessed data root (output of scripts/preprocess_et_data.py)
+  data_root: "/transfer/stc-data"
+  train_index_file: "train_index.json"
+  test_index_file: "test_index.json"
   num_workers: 4
   pin_memory: true
 
-# --- Rendering / Visualization ---
-rendering:
-  # Trajectory plot colors
-  theta_color: "#FFE66D"
-  phi_color: "#FF6B6B"
-  screen_pos_color: "#4ECDC4"
-  background_color: "#2C3E50"
-  # Grid layout for multi-shot view
-  grid_cols: 3
-
 # --- Paths ---
-# All under /transfer so clone and run use the same location.
+# All outputs under /transfer with stc- prefix
 paths:
-  checkpoint_dir: "/transfer/checkpoints"
-  output_dir: "/transfer/outputs"
-  log_dir: "/transfer/logs"
+  checkpoint_dir: "/transfer/stc-checkpoints"
+  output_dir: "/transfer/stc-outputs"
+  log_dir: "/transfer/stc-logs"

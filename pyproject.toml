@@ -1,7 +1,7 @@
 [project]
 name = "script-to-camera"
-version = "0.1.0"
-description = "Script-to-Camera: Generating Cinematic Camera Motion Trajectories from Screenplays via Diffusion Models"
+version = "0.2.0"
+description = "Script-to-Camera: Joint Person-Camera Trajectory Generation via Dual-Branch Diffusion"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -13,8 +13,6 @@ dependencies = [
 
     # Text Processing
     "transformers>=4.30.0",
-    "sentence-transformers>=2.2.0",
-    "openai>=1.0.0",
 
     # Visualization
     "matplotlib>=3.7.0",
@@ -26,6 +24,7 @@ dependencies = [
 
     # Data / Dataset download
     "huggingface_hub>=0.20.0",
+
     # Data Processing
     "scipy>=1.10.0",
     "numpy>=1.24.0",

@@ -1,4 +1,4 @@
 from .diffusion import GaussianDiffusion
-from .denoiser import CameraTrajectoryDenoiser
+from .denoiser import JointTrajectoryDenoiser
 from .film import FiLMLayer
 from .text_encoder import CLIPTextEncoder

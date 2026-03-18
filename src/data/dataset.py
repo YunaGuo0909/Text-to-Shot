@@ -1,8 +1,14 @@
 """
-Dataset classes for training the camera trajectory diffusion model.
+Dataset for joint person-camera trajectory diffusion training.
 
-Supports loading camera trajectory data extracted from film shots
-(e.g., ShotDeck) with text annotations, shot types, and motion labels.
+Each sample contains:
+- Person root trajectory: (T, 3) world positions
+- Camera trajectory: (T, 6) camera state (tx, ty, tz, azimuth, elevation, roll)
+- Text description
+- Shot type label
+- Camera motion type label
+
+Joint representation: y = [person_flat (T*3), camera_flat (T*6)]
 """
 
 import torch
@@ -13,21 +19,13 @@ import os
 from typing import Optional, Dict, List
 
 
-class CameraTrajectoryDataset(Dataset):
+class JointTrajectoryDataset(Dataset):
     """
-    Dataset for camera trajectory generation.
+    Dataset for joint person-camera trajectory generation.
 
-    Each sample contains:
-    - Camera trajectory: (num_frames, 6) Toric parameters over time
-    - Text description of the shot/scene
-    - Shot type label (close-up, medium-shot, wide-shot, etc.)
-    - Camera motion type label (dolly-in, pan-left, crane-up, etc.)
-
-    Data is sourced from ShotDeck film shots with camera parameters
-    extracted via camera estimation methods.
+    Loads paired (person, camera) trajectories with text annotations.
     """
 
-    # Maps for converting string labels to indices
     SHOT_TYPE_MAP = {
         "close-up": 0, "medium-shot": 1, "wide-shot": 2,
         "over-the-shoulder": 3, "two-shot": 4,
@@ -43,30 +41,24 @@ class CameraTrajectoryDataset(Dataset):
         data_root: str,
         split: str = 'train',
         num_frames: int = 48,
-        toric_dim: int = 6,
+        person_dim: int = 3,
+        camera_dim: int = 6,
         index_file: Optional[str] = None,
     ):
-        """
-        Args:
-            data_root: Root directory of the dataset
-            split: Dataset split ('train', 'val', 'test')
-            num_frames: Expected number of frames per trajectory
-            toric_dim: Dimension of Toric camera state (6)
-            index_file: Optional index filename (e.g. train_index_single_person.json).
-                        If None, uses {split}_index.json so original behaviour is unchanged.
-        """
         self.data_root = data_root
         self.split = split
         self.num_frames = num_frames
-        self.toric_dim = toric_dim
-        self.total_dim = num_frames * toric_dim
+        self.person_dim = person_dim
+        self.camera_dim = camera_dim
+        self.person_total = person_dim * num_frames
+        self.camera_total = camera_dim * num_frames
+        self.total_dim = self.person_total + self.camera_total
         self.index_file = index_file
 
         self.samples = self._load_index()
 
     def _load_index(self) -> List[Dict]:
-        """Load dataset index file (original or single-person subset without replacing files)."""
-        index_name = self.index_file if self.index_file is not None else f'{self.split}_index.json'
+        index_name = self.index_file if self.index_file else f'{self.split}_index.json'
         index_path = os.path.join(self.data_root, index_name)
         if os.path.exists(index_path):
             with open(index_path, 'r', encoding='utf-8') as f:
@@ -81,56 +73,70 @@ class CameraTrajectoryDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
 
-        # Load camera trajectory
-        if 'trajectory' in sample:
-            trajectory = np.array(sample['trajectory'], dtype=np.float32)
-        elif 'trajectory_path' in sample:
-            traj_path = os.path.join(self.data_root, sample['trajectory_path'])
-            trajectory = np.load(traj_path).astype(np.float32)
-        else:
-            trajectory = np.zeros((self.num_frames, self.toric_dim), dtype=np.float32)
+        # Load camera trajectory (T, 6)
+        camera_traj = self._load_trajectory(
+            sample, key='camera_trajectory_path', fallback_key='trajectory_path',
+            dim=self.camera_dim)
 
-        # Resample to fixed number of frames if needed
-        if trajectory.shape[0] != self.num_frames:
-            trajectory = self._resample_trajectory(trajectory, self.num_frames)
+        # Load person trajectory (T, 3)
+        person_traj = self._load_trajectory(
+            sample, key='person_trajectory_path', fallback_key=None,
+            dim=self.person_dim)
 
-        # Flatten to 1D vector for diffusion model
-        y = torch.tensor(trajectory.flatten(), dtype=torch.float32)
+        # Resample if needed
+        if camera_traj.shape[0] != self.num_frames:
+            camera_traj = self._resample(camera_traj, self.num_frames)
+        if person_traj.shape[0] != self.num_frames:
+            person_traj = self._resample(person_traj, self.num_frames)
 
-        # Text description
+        # Flatten and concatenate: [person_flat, camera_flat]
+        person_flat = torch.tensor(person_traj.flatten(), dtype=torch.float32)
+        camera_flat = torch.tensor(camera_traj.flatten(), dtype=torch.float32)
+        y = torch.cat([person_flat, camera_flat], dim=0)
+
         text = sample.get('text', sample.get('description', ''))
-
-        # Shot type
-        shot_type_str = sample.get('shot_type', '')
-        shot_type = self.SHOT_TYPE_MAP.get(shot_type_str, -1)
-
-        # Camera motion type
-        motion_type_str = sample.get('camera_motion', sample.get('motion_type', ''))
-        motion_type = self.MOTION_TYPE_MAP.get(motion_type_str, -1)
+        shot_type = self.SHOT_TYPE_MAP.get(sample.get('shot_type', ''), -1)
+        motion_type = self.MOTION_TYPE_MAP.get(
+            sample.get('camera_motion', sample.get('motion_type', '')), -1)
 
         return {
-            'y': y,                    # (num_frames * toric_dim,) flattened trajectory
+            'y': y,
             'text': text,
             'shot_type': shot_type,
             'motion_type': motion_type,
             'sample_id': sample.get('id', idx),
         }
 
-    def _resample_trajectory(self, trajectory: np.ndarray, target_frames: int) -> np.ndarray:
-        """Resample a trajectory to a fixed number of frames via linear interpolation."""
+    def _load_trajectory(self, sample, key, fallback_key, dim):
+        """Load a trajectory array from the sample entry."""
+        path_key = key
+        if path_key not in sample and fallback_key and fallback_key in sample:
+            path_key = fallback_key
+
+        if path_key in sample:
+            traj_path = os.path.join(self.data_root, sample[path_key])
+            if os.path.exists(traj_path):
+                traj = np.load(traj_path).astype(np.float32)
+                if traj.ndim == 1:
+                    traj = traj.reshape(-1, dim)
+                return traj
+
+        # Fallback: zeros
+        return np.zeros((self.num_frames, dim), dtype=np.float32)
+
+    def _resample(self, trajectory: np.ndarray, target_frames: int) -> np.ndarray:
         src_frames = trajectory.shape[0]
+        dim = trajectory.shape[1]
         src_t = np.linspace(0, 1, src_frames)
         tgt_t = np.linspace(0, 1, target_frames)
-
-        resampled = np.zeros((target_frames, self.toric_dim), dtype=np.float32)
-        for dim in range(self.toric_dim):
-            resampled[:, dim] = np.interp(tgt_t, src_t, trajectory[:, dim])
-
+        resampled = np.zeros((target_frames, dim), dtype=np.float32)
+        for d in range(dim):
+            resampled[:, d] = np.interp(tgt_t, src_t, trajectory[:, d])
         return resampled
 
 
 def collate_fn(batch):
-    """Custom collate function for the dataloader."""
+    """Custom collate function."""
     y = torch.stack([item['y'] for item in batch])
     texts = [item['text'] for item in batch]
     shot_types = torch.tensor([item['shot_type'] for item in batch], dtype=torch.long)

@@ -1,20 +1,21 @@
 """
-Preprocess E.T. (Exceptional Trajectories) dataset into the format
-required by the Script-to-Camera training pipeline.
+Preprocess E.T. dataset for joint person-camera trajectory training.
 
-Converts:
-  - 3×4 camera extrinsic matrices → 6D camera state (tx, ty, tz, azimuth, elevation, roll)
-  - caption_cam text files → text descriptions
-  - Keywords in captions → camera_motion type labels
+Extracts BOTH camera trajectory (T, 6) and person trajectory (T, 3) per sample.
+
+Camera: 3x4 extrinsic matrices → (tx, ty, tz, azimuth, elevation, roll)
+Person: If character joint data exists, extract root position.
+        Otherwise, estimate look-at point from camera as person proxy.
 
 Outputs:
-  - data/trajectories/*.npy  (T, 6) per-sample trajectory arrays
-  - data/train_index.json    training index file
-  - data/test_index.json     test index file
+  - stc-data/camera_trajectories/*.npy  (T, 6)
+  - stc-data/person_trajectories/*.npy  (T, 3)
+  - stc-data/train_index.json
+  - stc-data/test_index.json
 
 Usage:
     python scripts/preprocess_et_data.py
-    python scripts/preprocess_et_data.py --et-root data/et-data --output-root data --num-frames 48
+    python scripts/preprocess_et_data.py --et-root /transfer/et-data --output-root /transfer/stc-data
 """
 
 import os
@@ -25,46 +26,38 @@ from tqdm import tqdm
 
 
 def parse_extrinsic_line(line: str) -> np.ndarray:
-    """Parse a line of 12 floats into a 3×4 [R|t] matrix."""
+    """Parse 12 floats into a 3x4 [R|t] matrix."""
     vals = [float(x) for x in line.strip().split()]
     assert len(vals) == 12, f"Expected 12 values, got {len(vals)}"
     return np.array(vals).reshape(3, 4)
 
 
 def extrinsic_to_6d(R: np.ndarray, t: np.ndarray) -> np.ndarray:
-    """
-    Convert camera extrinsic (R, t) to 6D state:
-    (tx, ty, tz, azimuth, elevation, roll)
-
-    - azimuth (θ):  rotation around Y axis (left-right panning)
-    - elevation (φ): rotation around X axis (up-down tilting)
-    - roll (ψ):     rotation around Z axis (camera tilt/dutch angle)
-    """
+    """Convert (R, t) to 6D: (tx, ty, tz, azimuth, elevation, roll)."""
     tx, ty, tz = t[0], t[1], t[2]
-
-    # Extract Euler angles from rotation matrix (ZYX convention)
-    # R = Rz(ψ) @ Ry(θ) @ Rx(φ)
     sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
-
     if sy > 1e-6:
-        elevation = np.arctan2(-R[2, 0], sy)             # φ
-        azimuth = np.arctan2(R[1, 0], R[0, 0])           # θ
-        roll = np.arctan2(R[2, 1], R[2, 2])              # ψ
+        elevation = np.arctan2(-R[2, 0], sy)
+        azimuth = np.arctan2(R[1, 0], R[0, 0])
+        roll = np.arctan2(R[2, 1], R[2, 2])
     else:
         elevation = np.arctan2(-R[2, 0], sy)
         azimuth = np.arctan2(-R[1, 2], R[1, 1])
         roll = 0.0
-
     return np.array([tx, ty, tz, azimuth, elevation, roll], dtype=np.float32)
 
 
-def load_trajectory(traj_path: str) -> np.ndarray:
-    """
-    Load a trajectory file and convert each frame to 6D camera state.
+def extrinsic_to_lookat(R: np.ndarray, t: np.ndarray, distance: float = 3.0) -> np.ndarray:
+    """Estimate look-at point from camera extrinsic (used as person position proxy)."""
+    # Camera forward direction (negative Z in camera frame → world)
+    forward = -R[:, 2]
+    forward = forward / (np.linalg.norm(forward) + 1e-8)
+    lookat = t + forward * distance
+    return lookat.astype(np.float32)
 
-    Returns:
-        trajectory: (T, 6) array
-    """
+
+def load_camera_trajectory(traj_path: str):
+    """Load trajectory file → list of (R, t) pairs."""
     with open(traj_path, 'r', encoding='utf-8', errors='replace') as f:
         lines = f.readlines()
 
@@ -77,109 +70,83 @@ def load_trajectory(traj_path: str) -> np.ndarray:
             mat = parse_extrinsic_line(line)
             R = mat[:, :3]
             t = mat[:, 3]
-            state = extrinsic_to_6d(R, t)
-            frames.append(state)
+            frames.append((R, t))
         except Exception:
             continue
+    return frames
 
-    if len(frames) == 0:
-        return np.zeros((1, 6), dtype=np.float32)
 
-    return np.stack(frames, axis=0)
+def load_person_joints(joints_dir: str, sample_id: str):
+    """
+    Try to load person position data from E.T. dataset.
+    Returns (T, 3) root positions or None.
+    """
+    # Try common file patterns
+    for ext in ['.npy', '.npz', '.txt']:
+        path = os.path.join(joints_dir, f'{sample_id}{ext}')
+        if os.path.exists(path):
+            try:
+                if ext == '.npy':
+                    data = np.load(path)
+                    if data.ndim >= 2 and data.shape[-1] >= 3:
+                        # Take root joint (first joint or first 3 dims)
+                        if data.ndim == 3:
+                            return data[:, 0, :3].astype(np.float32)
+                        else:
+                            return data[:, :3].astype(np.float32)
+                elif ext == '.npz':
+                    data = np.load(path)
+                    for key in ['joints', 'positions', 'root', 'body']:
+                        if key in data:
+                            arr = data[key]
+                            if arr.ndim == 3:
+                                return arr[:, 0, :3].astype(np.float32)
+                            elif arr.ndim == 2:
+                                return arr[:, :3].astype(np.float32)
+            except Exception:
+                continue
+    return None
 
 
 def resample_trajectory(trajectory: np.ndarray, target_frames: int) -> np.ndarray:
-    """Resample trajectory to fixed number of frames via linear interpolation."""
     src_frames = trajectory.shape[0]
     if src_frames == target_frames:
         return trajectory
-
+    dim = trajectory.shape[1]
     src_t = np.linspace(0, 1, src_frames)
     tgt_t = np.linspace(0, 1, target_frames)
-
-    resampled = np.zeros((target_frames, 6), dtype=np.float32)
-    for dim in range(6):
-        resampled[:, dim] = np.interp(tgt_t, src_t, trajectory[:, dim])
-
+    resampled = np.zeros((target_frames, dim), dtype=np.float32)
+    for d in range(dim):
+        resampled[:, d] = np.interp(tgt_t, src_t, trajectory[:, d])
     return resampled
 
 
 def classify_camera_motion(caption: str) -> str:
-    """
-    Classify camera motion type from caption text using keyword matching.
-    Maps E.T. terminology to our motion categories.
-    """
     text = caption.lower()
-
-    # Order matters: check specific terms before general ones
     if 'static' in text or 'stationary' in text or 'remains still' in text:
         return 'static'
     if 'push-in' in text or 'push in' in text or 'pushes in' in text:
         return 'dolly-in'
-    if 'pull-out' in text or 'pull out' in text or 'pulls out' in text or 'pull back' in text:
+    if 'pull-out' in text or 'pull out' in text or 'pull back' in text:
         return 'dolly-out'
     if 'dolly' in text:
-        if 'in' in text or 'forward' in text:
-            return 'dolly-in'
-        elif 'out' in text or 'back' in text:
-            return 'dolly-out'
-        return 'dolly-in'
+        return 'dolly-in' if ('in' in text or 'forward' in text) else 'dolly-out'
     if 'pan' in text:
-        if 'left' in text:
-            return 'pan-left'
-        elif 'right' in text:
-            return 'pan-right'
-        return 'pan-right'
-    if 'tilt' in text:
-        if 'up' in text:
-            return 'crane-up'
-        elif 'down' in text:
-            return 'crane-down'
-        return 'crane-up'
-    if 'crane' in text or 'pedestal' in text or 'boom' in text:
-        if 'up' in text or 'top' in text or 'rise' in text:
-            return 'crane-up'
-        elif 'down' in text or 'bottom' in text or 'lower' in text:
-            return 'crane-down'
-        return 'crane-up'
+        return 'pan-left' if 'left' in text else 'pan-right'
+    if 'tilt' in text or 'crane' in text or 'pedestal' in text:
+        return 'crane-up' if ('up' in text or 'rise' in text) else 'crane-down'
     if 'orbit' in text or 'arc' in text or 'circular' in text:
         return 'orbit'
-    if 'truck' in text or 'lateral' in text or 'tracking' in text:
-        if 'left' in text:
-            return 'track'
-        elif 'right' in text:
-            return 'track'
-        return 'track'
-    if 'follow' in text or 'track' in text:
+    if 'truck' in text or 'lateral' in text or 'tracking' in text or 'follow' in text or 'track' in text:
         return 'track'
     if 'zoom' in text:
-        if 'in' in text:
-            return 'dolly-in'
-        elif 'out' in text:
-            return 'dolly-out'
-        return 'dolly-in'
-    if 'move' in text:
-        if 'left' in text:
-            return 'pan-left'
-        elif 'right' in text:
-            return 'pan-right'
-        elif 'up' in text:
-            return 'crane-up'
-        elif 'down' in text:
-            return 'crane-down'
-        elif 'forward' in text:
-            return 'dolly-in'
-        elif 'back' in text:
-            return 'dolly-out'
-        return 'track'
-
+        return 'dolly-in' if 'in' in text else 'dolly-out'
     return 'static'
 
 
 def infer_shot_type(caption: str) -> str:
-    """Infer shot type from caption text. Default to medium-shot."""
     text = caption.lower()
-    if 'close-up' in text or 'closeup' in text or 'close up' in text:
+    if 'close-up' in text or 'closeup' in text:
         return 'close-up'
     if 'wide' in text or 'establish' in text:
         return 'wide-shot'
@@ -191,30 +158,50 @@ def infer_shot_type(caption: str) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Preprocess E.T. dataset')
-    parser.add_argument('--et-root', type=str, default='/transfer/et-data',
-                        help='Path to E.T. dataset root (default: /transfer/et-data)')
-    parser.add_argument('--output-root', type=str, default='/transfer/data',
-                        help='Output directory for processed data (default: /transfer/data)')
-    parser.add_argument('--num-frames', type=int, default=48,
-                        help='Number of frames to resample each trajectory to')
-    parser.add_argument('--min-frames', type=int, default=10,
-                        help='Minimum number of raw frames to include a sample')
+    parser = argparse.ArgumentParser(description='Preprocess E.T. for joint training')
+    parser.add_argument('--et-root', type=str, default='/transfer/et-data')
+    parser.add_argument('--output-root', type=str, default='/transfer/stc-data')
+    parser.add_argument('--num-frames', type=int, default=48)
+    parser.add_argument('--min-frames', type=int, default=10)
+    parser.add_argument('--lookat-distance', type=float, default=3.0,
+                        help='Default distance for look-at person proxy')
     args = parser.parse_args()
 
     et_root = args.et_root
     output_root = args.output_root
-    num_frames = args.num_frames
+
+    # Check dataset exists
+    if not os.path.isdir(et_root):
+        print(f"Error: E.T. dataset not found at {et_root}")
+        print("Run: python scripts/download_et_data.py")
+        return
 
     traj_dir = os.path.join(et_root, 'traj')
+    if not os.path.isdir(traj_dir):
+        print(f"Error: No traj/ directory in {et_root}")
+        return
+
     caption_dir = os.path.join(et_root, 'caption')
     caption_cam_dir = os.path.join(et_root, 'caption_cam')
 
-    # Output directories
-    out_traj_dir = os.path.join(output_root, 'trajectories')
-    os.makedirs(out_traj_dir, exist_ok=True)
+    # Look for person joint data
+    joints_dir = None
+    for candidate in ['joints', 'body', 'smpl', 'character', 'motion']:
+        d = os.path.join(et_root, candidate)
+        if os.path.isdir(d):
+            joints_dir = d
+            print(f"Found person data directory: {d}")
+            break
+    if joints_dir is None:
+        print("No person joint directory found. Will estimate person position from camera look-at.")
 
-    # Load split files
+    # Output directories
+    cam_out_dir = os.path.join(output_root, 'camera_trajectories')
+    person_out_dir = os.path.join(output_root, 'person_trajectories')
+    os.makedirs(cam_out_dir, exist_ok=True)
+    os.makedirs(person_out_dir, exist_ok=True)
+
+    # Load splits
     splits = {}
     for split_name in ['train', 'test']:
         split_file = os.path.join(et_root, f'full_{split_name}_split.txt')
@@ -223,111 +210,110 @@ def main():
                 splits[split_name] = set(line.strip() for line in f if line.strip())
             print(f"Loaded {split_name} split: {len(splits[split_name])} samples")
         else:
-            print(f"Warning: {split_file} not found")
             splits[split_name] = set()
 
-    # Get all sample IDs from trajectory directory
-    all_sample_ids = sorted(
-        f[:-4] for f in os.listdir(traj_dir) if f.endswith('.txt')
-    )
+    # Process
+    all_sample_ids = sorted(f[:-4] for f in os.listdir(traj_dir) if f.endswith('.txt'))
     print(f"\nTotal trajectory files: {len(all_sample_ids)}")
 
-    # Process samples
     train_index = []
     test_index = []
+    stats = {'total': 0, 'skipped': 0, 'has_joints': 0, 'lookat_proxy': 0}
     motion_counts = {}
-    skipped = 0
 
-    for sample_id in tqdm(all_sample_ids, desc="Processing trajectories"):
+    for sample_id in tqdm(all_sample_ids, desc="Processing"):
         traj_path = os.path.join(traj_dir, f'{sample_id}.txt')
+        frames = load_camera_trajectory(traj_path)
 
-        # Load and convert trajectory
-        trajectory = load_trajectory(traj_path)
-
-        if trajectory.shape[0] < args.min_frames:
-            skipped += 1
+        if len(frames) < args.min_frames:
+            stats['skipped'] += 1
             continue
 
-        # Resample to fixed length
-        trajectory = resample_trajectory(trajectory, num_frames)
+        # Camera trajectory (T, 6)
+        camera_traj = np.stack([extrinsic_to_6d(R, t) for R, t in frames], axis=0)
+        camera_traj = resample_trajectory(camera_traj, args.num_frames)
 
-        # Save as .npy
-        npy_filename = f'{sample_id}.npy'
-        npy_path = os.path.join(out_traj_dir, npy_filename)
-        np.save(npy_path, trajectory)
+        # Person trajectory (T, 3)
+        person_traj = None
+        if joints_dir:
+            person_traj = load_person_joints(joints_dir, sample_id)
 
-        # Load caption (camera-specific)
-        caption_cam_path = os.path.join(caption_cam_dir, f'{sample_id}.txt')
-        caption_path = os.path.join(caption_dir, f'{sample_id}.txt')
+        if person_traj is not None:
+            person_traj = resample_trajectory(person_traj, args.num_frames)
+            stats['has_joints'] += 1
+        else:
+            # Estimate from camera look-at
+            person_positions = np.stack(
+                [extrinsic_to_lookat(R, t, args.lookat_distance) for R, t in frames],
+                axis=0)
+            person_traj = resample_trajectory(person_positions, args.num_frames)
+            stats['lookat_proxy'] += 1
 
+        # Save
+        np.save(os.path.join(cam_out_dir, f'{sample_id}.npy'), camera_traj)
+        np.save(os.path.join(person_out_dir, f'{sample_id}.npy'), person_traj)
+
+        # Caption
         caption_cam = ''
         caption_full = ''
-        if os.path.exists(caption_cam_path):
-            try:
-                with open(caption_cam_path, 'r', encoding='utf-8', errors='replace') as f:
-                    caption_cam = f.read().strip()
-            except Exception:
-                pass
-        if os.path.exists(caption_path):
-            try:
-                with open(caption_path, 'r', encoding='utf-8', errors='replace') as f:
-                    caption_full = f.read().strip()
-            except Exception:
-                pass
+        for path, target in [
+            (os.path.join(caption_cam_dir, f'{sample_id}.txt'), 'cam'),
+            (os.path.join(caption_dir, f'{sample_id}.txt'), 'full'),
+        ]:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                        text = f.read().strip()
+                    if target == 'cam':
+                        caption_cam = text
+                    else:
+                        caption_full = text
+                except Exception:
+                    pass
 
-        # Use camera caption as primary, fall back to full caption
         text = caption_cam if caption_cam else caption_full
-
-        # Classify motion type and shot type
         camera_motion = classify_camera_motion(text)
         shot_type = infer_shot_type(caption_full)
-
         motion_counts[camera_motion] = motion_counts.get(camera_motion, 0) + 1
 
-        # Build sample entry
         entry = {
             'id': sample_id,
             'text': text,
             'shot_type': shot_type,
             'camera_motion': camera_motion,
-            'trajectory_path': f'trajectories/{npy_filename}',
-            'num_raw_frames': int(trajectory.shape[0]),
+            'camera_trajectory_path': f'camera_trajectories/{sample_id}.npy',
+            'person_trajectory_path': f'person_trajectories/{sample_id}.npy',
         }
 
-        # Assign to split
         if sample_id in splits.get('test', set()):
             test_index.append(entry)
         else:
             train_index.append(entry)
 
+        stats['total'] += 1
+
     # Save index files
-    train_path = os.path.join(output_root, 'train_index.json')
-    test_path = os.path.join(output_root, 'test_index.json')
+    for name, index in [('train_index.json', train_index), ('test_index.json', test_index)]:
+        path = os.path.join(output_root, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(index, f, indent=2, ensure_ascii=False)
 
-    with open(train_path, 'w', encoding='utf-8') as f:
-        json.dump(train_index, f, indent=2, ensure_ascii=False)
-
-    with open(test_path, 'w', encoding='utf-8') as f:
-        json.dump(test_index, f, indent=2, ensure_ascii=False)
-
-    # Print summary
-    print("\n" + "=" * 60)
+    # Summary
+    print(f"\n{'='*60}")
     print("Preprocessing Complete!")
-    print("=" * 60)
-    print(f"  Train samples: {len(train_index)}")
-    print(f"  Test samples:  {len(test_index)}")
-    print(f"  Skipped (< {args.min_frames} frames): {skipped}")
-    print(f"  Frames per trajectory: {num_frames}")
-    print(f"  State dimension: 6 (tx, ty, tz, azimuth, elevation, roll)")
+    print(f"{'='*60}")
+    print(f"  Train: {len(train_index)}  |  Test: {len(test_index)}")
+    print(f"  Skipped: {stats['skipped']}  |  Frames/traj: {args.num_frames}")
+    print(f"  Person data: {stats['has_joints']} from joints, {stats['lookat_proxy']} from look-at proxy")
     print(f"\n  Camera motion distribution:")
+    total = len(train_index) + len(test_index)
     for motion, count in sorted(motion_counts.items(), key=lambda x: -x[1]):
-        pct = count / (len(train_index) + len(test_index)) * 100
-        print(f"    {motion:15s}: {count:6d} ({pct:5.1f}%)")
-    print(f"\n  Output files:")
-    print(f"    {train_path}")
-    print(f"    {test_path}")
-    print(f"    {out_traj_dir}/ ({len(train_index) + len(test_index)} .npy files)")
-    print("=" * 60)
+        print(f"    {motion:15s}: {count:6d} ({100*count/max(total,1):5.1f}%)")
+    print(f"\n  Output: {output_root}")
+    print(f"    camera_trajectories/ ({total} .npy)")
+    print(f"    person_trajectories/ ({total} .npy)")
+    print(f"    train_index.json, test_index.json")
+    print(f"{'='*60}")
 
 
 if __name__ == '__main__':

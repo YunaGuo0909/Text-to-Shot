@@ -1,9 +1,10 @@
 """
-Training script for the Camera Trajectory Diffusion Model.
+Training script for Joint Person-Camera Trajectory Diffusion Model.
 
 Usage:
     python train.py --config configs/default.yaml --device cuda
     python train.py --config configs/default.yaml --device cpu --no-clip
+    python train.py --config configs/default.yaml --device cuda --single-person
 """
 
 import argparse
@@ -11,23 +12,20 @@ import os
 import yaml
 import torch
 from torch.utils.data import DataLoader
-from src.models.denoiser import CameraTrajectoryDenoiser
+from src.models.denoiser import JointTrajectoryDenoiser
 from src.models.diffusion import GaussianDiffusion
-from src.data.dataset import CameraTrajectoryDataset, collate_fn
+from src.data.dataset import JointTrajectoryDataset, collate_fn
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Train Camera Trajectory Model')
-    parser.add_argument('--config', type=str, default='configs/default.yaml',
-                        help='Path to config file')
-    parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from')
-    parser.add_argument('--device', type=str, default='cuda',
-                        help='Device to train on')
+    parser = argparse.ArgumentParser(description='Train Joint Person-Camera Model')
+    parser.add_argument('--config', type=str, default='configs/default.yaml')
+    parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--no-clip', action='store_true',
-                        help='Use random text embeddings instead of CLIP (for testing)')
+                        help='Use random text embeddings instead of CLIP')
     parser.add_argument('--single-person', action='store_true',
-                        help='Use E.T. single-person subset (train_index_single_person.json, test_index_single_person.json)')
+                        help='Use single-person subset')
     return parser.parse_args()
 
 
@@ -37,7 +35,6 @@ def load_config(config_path):
 
 
 def build_text_encoder(config, device, use_clip=True):
-    """Build text encoder: real CLIP or random fallback."""
     if use_clip:
         try:
             from src.models.text_encoder import CLIPTextEncoder
@@ -45,28 +42,29 @@ def build_text_encoder(config, device, use_clip=True):
             print(f"Loading CLIP text encoder: {model_name}")
             encoder = CLIPTextEncoder(model_name=model_name, device=device)
             encoder = encoder.to(device)
-            print("CLIP text encoder loaded successfully.")
+            print("CLIP text encoder loaded.")
             return encoder
         except Exception as e:
-            print(f"Warning: Failed to load CLIP ({e}). Falling back to random embeddings.")
+            print(f"Warning: Failed to load CLIP ({e}). Using random embeddings.")
             return None
     else:
-        print("Using random text embeddings (--no-clip flag set).")
+        print("Using random text embeddings (--no-clip).")
         return None
 
 
-def train(config, device, use_clip=True, single_person=False):
-    """Main training loop."""
+def train(config, args):
+    device = args.device if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
 
     model_cfg = config['model']
     traj_cfg = config['trajectory']
 
-    # Text encoder
-    text_encoder = build_text_encoder(config, device, use_clip)
+    text_encoder = build_text_encoder(config, device, use_clip=not args.no_clip)
 
-    # Create denoiser
-    denoiser = CameraTrajectoryDenoiser(
-        toric_dim=model_cfg['toric_dim'],
+    # Build joint denoiser
+    denoiser = JointTrajectoryDenoiser(
+        person_dim=model_cfg['person_dim'],
+        camera_dim=model_cfg['camera_dim'],
         num_frames=traj_cfg['default_num_frames'],
         hidden_dim=model_cfg['hidden_dim'],
         num_layers=model_cfg['num_layers'],
@@ -80,34 +78,35 @@ def train(config, device, use_clip=True, single_person=False):
         dropout=model_cfg.get('dropout', 0.1),
     ).to(device)
 
-    # Create diffusion model
     diffusion = GaussianDiffusion(
         denoiser=denoiser,
         num_timesteps=config['diffusion']['num_timesteps'],
         beta_schedule=config['diffusion']['beta_schedule'],
     ).to(device)
 
-    # Resume from checkpoint
+    # Resume
     start_epoch = 0
+    optimizer_state = None
     if args.resume and os.path.exists(args.resume):
         print(f"Resuming from {args.resume}")
         ckpt = torch.load(args.resume, map_location=device)
         diffusion.load_state_dict(ckpt['model_state_dict'])
         start_epoch = ckpt.get('epoch', 0)
+        optimizer_state = ckpt.get('optimizer_state_dict', None)
         print(f"Resumed from epoch {start_epoch}")
 
-    # Create dataset and dataloader (index_file: full set or single-person subset)
+    # Dataset
     train_index = config['data'].get('train_index_file', 'train_index.json')
-    if single_person:
+    if args.single_person:
         train_index = 'train_index_single_person.json'
-        config['data']['train_index_file'] = train_index
-        config['data']['test_index_file'] = 'test_index_single_person.json'
-        print("Using E.T. single-person subset: train_index_single_person.json")
-    dataset = CameraTrajectoryDataset(
+        print(f"Using single-person subset: {train_index}")
+
+    dataset = JointTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='train',
         num_frames=traj_cfg['default_num_frames'],
-        toric_dim=model_cfg['toric_dim'],
+        person_dim=model_cfg['person_dim'],
+        camera_dim=model_cfg['camera_dim'],
         index_file=train_index,
     )
 
@@ -126,12 +125,10 @@ def train(config, device, use_clip=True, single_person=False):
         lr=config['training']['learning_rate'],
         weight_decay=config['training']['weight_decay'],
     )
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
 
-    if args.resume and os.path.exists(args.resume):
-        if 'optimizer_state_dict' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-
-    # Training loop
+    # Training
     num_epochs = config['training']['num_epochs']
     save_interval = config['training']['save_interval']
     checkpoint_dir = config['paths']['checkpoint_dir']
@@ -139,12 +136,19 @@ def train(config, device, use_clip=True, single_person=False):
 
     total_params = sum(p.numel() for p in diffusion.parameters())
     trainable_params = sum(p.numel() for p in diffusion.parameters() if p.requires_grad)
-    print(f"\nStarting training for {num_epochs} epochs (from epoch {start_epoch})...")
-    print(f"Total parameters: {total_params:,}  |  Trainable: {trainable_params:,}")
-    print(f"Trajectory: {traj_cfg['default_num_frames']} frames x {model_cfg['toric_dim']}D "
-          f"= {traj_cfg['default_num_frames'] * model_cfg['toric_dim']}D total")
-    print(f"Dataset: {len(dataset)} samples  |  Batch size: {config['training']['batch_size']}")
-    print(f"Text conditioning: {'CLIP' if text_encoder else 'Random'}\n")
+    T = traj_cfg['default_num_frames']
+    p_dim = model_cfg['person_dim']
+    c_dim = model_cfg['camera_dim']
+
+    print(f"\n{'='*60}")
+    print(f"Joint Person-Camera Diffusion Training")
+    print(f"{'='*60}")
+    print(f"  Parameters: {total_params:,} total, {trainable_params:,} trainable")
+    print(f"  Joint dim: person ({T}x{p_dim}={T*p_dim}) + camera ({T}x{c_dim}={T*c_dim}) = {T*(p_dim+c_dim)}")
+    print(f"  Dataset: {len(dataset)} samples | Batch: {config['training']['batch_size']}")
+    print(f"  Text: {'CLIP' if text_encoder else 'Random'}")
+    print(f"  Checkpoints: {checkpoint_dir}")
+    print(f"{'='*60}\n")
 
     for epoch in range(start_epoch, num_epochs):
         diffusion.train()
@@ -160,37 +164,32 @@ def train(config, device, use_clip=True, single_person=False):
             else:
                 text_embed = torch.randn(y.shape[0], 512, device=device)
 
-            # Shot type conditioning
             shot_types = batch['shot_types'].to(device)
             shot_type = shot_types if (shot_types >= 0).all() else None
 
-            # Motion type conditioning
             motion_types = batch['motion_types'].to(device)
             motion_type = motion_types if (motion_types >= 0).all() else None
 
-            # Compute loss
             loss = diffusion.p_losses(y, text_embed,
                                       shot_type=shot_type,
                                       motion_type=motion_type)
 
             optimizer.zero_grad()
             loss.backward()
-
             torch.nn.utils.clip_grad_norm_(
                 diffusion.parameters(),
                 config['training']['gradient_clip'],
             )
-
             optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
 
         avg_loss = total_loss / max(num_batches, 1)
-        print(f"Epoch [{epoch+1}/{num_epochs}] Avg Loss: {avg_loss:.6f}")
+        print(f"Epoch [{epoch+1}/{num_epochs}] Loss: {avg_loss:.6f}")
 
         if (epoch + 1) % save_interval == 0:
-            ckpt_path = os.path.join(checkpoint_dir, f'checkpoint_epoch{epoch+1}.pth')
+            ckpt_path = os.path.join(checkpoint_dir, f'stc_epoch{epoch+1}.pth')
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': diffusion.state_dict(),
@@ -198,10 +197,10 @@ def train(config, device, use_clip=True, single_person=False):
                 'loss': avg_loss,
                 'config': config,
             }, ckpt_path)
-            print(f"Checkpoint saved to {ckpt_path}")
+            print(f"  Saved: {ckpt_path}")
 
-    # Save final model
-    final_path = os.path.join(checkpoint_dir, 'checkpoint_final.pth')
+    # Final
+    final_path = os.path.join(checkpoint_dir, 'stc_final.pth')
     torch.save({
         'epoch': num_epochs,
         'model_state_dict': diffusion.state_dict(),
@@ -209,14 +208,10 @@ def train(config, device, use_clip=True, single_person=False):
         'loss': avg_loss,
         'config': config,
     }, final_path)
-    print(f"\nTraining complete! Final model saved to {final_path}")
+    print(f"\nTraining complete! Final model: {final_path}")
 
 
 if __name__ == '__main__':
     args = parse_args()
     config = load_config(args.config)
-
-    device = args.device if torch.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
-
-    train(config, device, use_clip=not args.no_clip, single_person=args.single_person)
+    train(config, args)
