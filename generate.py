@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import os
+import time
 import torch
 import numpy as np
 import matplotlib
@@ -93,12 +94,29 @@ def generate(args):
     shot_type = torch.tensor([shot_idx], device=device)
     motion_type = torch.tensor([motion_idx], device=device)
 
+    # Load norm stats for denormalization
+    norm_mean = norm_std = None
+    norm_stats_path = config['data'].get('norm_stats_path', None)
+    if norm_stats_path and os.path.exists(norm_stats_path):
+        import json
+        with open(norm_stats_path, 'r') as f:
+            stats = json.load(f)
+        import torch as _torch
+        norm_mean = _torch.tensor(stats['mean'], dtype=torch.float32, device=device)
+        norm_std = _torch.tensor(stats['std'], dtype=torch.float32, device=device)
+        print(f"  Using norm stats from {norm_stats_path}")
+
     # Generate
     print(f"Generating: \"{args.text}\"")
-    print(f"  shot={args.shot_type}, motion={args.motion}")
+    print(f"  shot={args.shot_type}, motion={args.motion}, guidance_scale={args.guidance_scale}")
 
     y = diffusion.sample(text_embed, shot_type=shot_type,
-                         motion_type=motion_type, device=device)
+                         motion_type=motion_type, device=device,
+                         guidance_scale=args.guidance_scale)
+
+    # Denormalize
+    if norm_mean is not None:
+        y = y * norm_std + norm_mean
 
     y_np = y[0].cpu().numpy()
     person_traj = y_np[:person_total].reshape(num_frames, person_dim)
@@ -108,14 +126,15 @@ def generate(args):
     output_dir = config['paths']['output_dir']
     os.makedirs(output_dir, exist_ok=True)
 
-    np.save(os.path.join(output_dir, 'gen_person.npy'), person_traj)
-    np.save(os.path.join(output_dir, 'gen_camera.npy'), camera_traj)
+    tag = f"{args.motion}_{args.shot_type}_{time.strftime('%m%d_%H%M%S')}"
+    np.save(os.path.join(output_dir, f'gen_person_{tag}.npy'), person_traj)
+    np.save(os.path.join(output_dir, f'gen_camera_{tag}.npy'), camera_traj)
 
     # Visualize
     visualize_joint(person_traj, camera_traj, args.text, args.motion,
-                    save_path=os.path.join(output_dir, 'gen_joint.png'))
+                    save_path=os.path.join(output_dir, f'gen_joint_{tag}.png'))
 
-    print(f"Outputs saved to {output_dir}/")
+    print(f"Outputs saved to {output_dir}/  [tag: {tag}]")
 
 
 def visualize_joint(person_traj, camera_traj, text, motion, save_path):
@@ -174,6 +193,8 @@ def main():
     parser.add_argument('--motion', type=str, default='static',
                         choices=list(MOTION_TYPE_MAP.keys()))
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--guidance-scale', type=float, default=3.0,
+                        help='Classifier-Free Guidance scale (1.0=off, 3-7=typical)')
     args = parser.parse_args()
     generate(args)
 

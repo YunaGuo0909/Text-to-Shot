@@ -6,7 +6,7 @@
 
 ## Overview
 
-Given a text scene description, this system **simultaneously generates** a person's 3D motion trajectory and a cinematic camera trajectory that follows the person — using a dual-branch diffusion model with cross-attention.
+Given a text scene description, this system **simultaneously generates** a person's 3D motion trajectory and a cinematic camera trajectory — using a dual-branch diffusion model with cross-attention.
 
 ```
 Text Description ──▶ CLIP Encoder ──▶ Dual-Branch Diffusion ──▶ Person Trajectory (T, 3)
@@ -14,7 +14,7 @@ Text Description ──▶ CLIP Encoder ──▶ Dual-Branch Diffusion ──�
                                        └─ Camera Branch ◄──►─┘   Camera Trajectory (T, 6)
 ```
 
-Unlike prior work (e.g., E.T.) that only generates camera trajectories, our approach **jointly models person-camera interaction** via cross-attention, producing more cinematically coherent results for single-person scenes.
+**Key distinction from prior work:** E.T./DIRECTOR (Wang et al., 2024) generates camera trajectories *conditioned on pre-given character motion* — the person's movement must already exist as input. Our system requires **no pre-existing character data**: both person and camera trajectories are generated from text alone. This enables fully automated scene generation without an upstream motion capture or motion synthesis step.
 
 Training data: [E.T. (Exceptional Trajectories)](https://github.com/robincourant/DIRECTOR) dataset — real film camera trajectories + SMPL-H character data.
 
@@ -239,7 +239,7 @@ python evaluate.py \
 
 ## References
 
-- **E.T.**: Wang et al. (2024), "E.T. the Exceptional Trajectories" — dataset
+- **E.T. / DIRECTOR**: Courant et al. (2024), "E.T. the Exceptional Trajectories" — dataset + camera diffusion model that generates camera trajectories *given* character motion as input
 - **DDPM**: Ho, Jain & Abbeel (2020), NeurIPS — diffusion framework
 - **CLIP**: Radford et al. (2021), ICML — text encoder
 - **FiLM**: Perez et al. (2018), AAAI — conditioning layer

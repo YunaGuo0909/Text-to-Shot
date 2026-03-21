@@ -101,6 +101,8 @@ def train(config, args):
         train_index = 'train_index_single_person.json'
         print(f"Using single-person subset: {train_index}")
 
+    norm_stats_path = config['data'].get('norm_stats_path', None)
+
     dataset = JointTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='train',
@@ -108,6 +110,7 @@ def train(config, args):
         person_dim=model_cfg['person_dim'],
         camera_dim=model_cfg['camera_dim'],
         index_file=train_index,
+        norm_stats_path=norm_stats_path,
     )
 
     dataloader = DataLoader(
@@ -127,6 +130,10 @@ def train(config, args):
     )
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
+
+    # CFG dropout probability
+    cfg_dropout_prob = config['training'].get('cfg_dropout_prob', 0.1)
+    print(f"  CFG dropout prob: {cfg_dropout_prob}")
 
     # Training
     num_epochs = config['training']['num_epochs']
@@ -163,6 +170,12 @@ def train(config, args):
                 text_embed = text_encoder(batch['texts'])
             else:
                 text_embed = torch.randn(y.shape[0], 512, device=device)
+
+            # Classifier-Free Guidance: randomly drop text conditioning
+            if cfg_dropout_prob > 0:
+                drop_mask = torch.rand(y.shape[0], device=device) < cfg_dropout_prob
+                text_embed = text_embed.clone()
+                text_embed[drop_mask] = 0.0
 
             shot_types = batch['shot_types'].to(device)
             shot_type = shot_types if (shot_types >= 0).all() else None

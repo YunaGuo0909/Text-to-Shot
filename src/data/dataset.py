@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import json
 import os
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 
 class JointTrajectoryDataset(Dataset):
@@ -44,6 +44,7 @@ class JointTrajectoryDataset(Dataset):
         person_dim: int = 3,
         camera_dim: int = 6,
         index_file: Optional[str] = None,
+        norm_stats_path: Optional[str] = None,
     ):
         self.data_root = data_root
         self.split = split
@@ -54,6 +55,17 @@ class JointTrajectoryDataset(Dataset):
         self.camera_total = camera_dim * num_frames
         self.total_dim = self.person_total + self.camera_total
         self.index_file = index_file
+
+        self.norm_mean: Optional[torch.Tensor] = None
+        self.norm_std: Optional[torch.Tensor] = None
+        if norm_stats_path and os.path.exists(norm_stats_path):
+            with open(norm_stats_path, 'r') as f:
+                stats = json.load(f)
+            self.norm_mean = torch.tensor(stats['mean'], dtype=torch.float32)
+            self.norm_std = torch.tensor(stats['std'], dtype=torch.float32)
+            print(f"Loaded norm stats from {norm_stats_path} ({stats.get('n_samples', '?')} samples)")
+        elif norm_stats_path:
+            print(f"Warning: norm_stats_path not found: {norm_stats_path}")
 
         self.samples = self._load_index()
 
@@ -94,6 +106,10 @@ class JointTrajectoryDataset(Dataset):
         camera_flat = torch.tensor(camera_traj.flatten(), dtype=torch.float32)
         y = torch.cat([person_flat, camera_flat], dim=0)
 
+        # Normalize if stats available
+        if self.norm_mean is not None:
+            y = (y - self.norm_mean) / self.norm_std
+
         text = sample.get('text', sample.get('description', ''))
         shot_type = self.SHOT_TYPE_MAP.get(sample.get('shot_type', ''), -1)
         motion_type = self.MOTION_TYPE_MAP.get(
@@ -123,6 +139,12 @@ class JointTrajectoryDataset(Dataset):
 
         # Fallback: zeros
         return np.zeros((self.num_frames, dim), dtype=np.float32)
+
+    def denormalize(self, y: torch.Tensor) -> torch.Tensor:
+        """Undo normalization. y: (..., total_dim)"""
+        if self.norm_mean is None:
+            return y
+        return y * self.norm_std.to(y.device) + self.norm_mean.to(y.device)
 
     def _resample(self, trajectory: np.ndarray, target_frames: int) -> np.ndarray:
         src_frames = trajectory.shape[0]

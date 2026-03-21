@@ -90,10 +90,20 @@ class GaussianDiffusion(nn.Module):
         return loss
 
     @torch.no_grad()
-    def p_sample(self, y_t, t, text_embed, shot_type=None, motion_type=None):
+    def p_sample(self, y_t, t, text_embed, shot_type=None, motion_type=None,
+                 guidance_scale=1.0):
         """Reverse step: sample y_{t-1} from p_theta(y_{t-1} | y_t)."""
-        y_0_pred = self.denoiser(y_t, t, text_embed,
-                                 shot_type=shot_type, motion_type=motion_type)
+        if guidance_scale > 1.0:
+            # Classifier-Free Guidance: run denoiser with null and text embed
+            null_embed = torch.zeros_like(text_embed)
+            y_0_null = self.denoiser(y_t, t, null_embed,
+                                     shot_type=None, motion_type=None)
+            y_0_text = self.denoiser(y_t, t, text_embed,
+                                     shot_type=shot_type, motion_type=motion_type)
+            y_0_pred = y_0_null + guidance_scale * (y_0_text - y_0_null)
+        else:
+            y_0_pred = self.denoiser(y_t, t, text_embed,
+                                     shot_type=shot_type, motion_type=motion_type)
 
         posterior_mean = (
             self.posterior_mean_coef1[t].unsqueeze(-1) * y_0_pred +
@@ -108,10 +118,13 @@ class GaussianDiffusion(nn.Module):
             return posterior_mean
 
     @torch.no_grad()
-    def sample(self, text_embed, shot_type=None, motion_type=None, device='cuda'):
+    def sample(self, text_embed, shot_type=None, motion_type=None, device='cuda',
+               guidance_scale=1.0):
         """
         Generate joint person-camera trajectory.
 
+        Args:
+            guidance_scale: CFG scale. 1.0 = no CFG. 3.0-7.0 = typical range.
         Returns:
             y_0: (B, total_dim) = [person_flat (T*3), camera_flat (T*6)]
         """
@@ -123,6 +136,7 @@ class GaussianDiffusion(nn.Module):
         for t in reversed(range(self.num_timesteps)):
             t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
             y_t = self.p_sample(y_t, t_batch, text_embed,
-                                shot_type=shot_type, motion_type=motion_type)
+                                shot_type=shot_type, motion_type=motion_type,
+                                guidance_scale=guidance_scale)
 
         return y_t
