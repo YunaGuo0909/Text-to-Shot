@@ -100,14 +100,15 @@ def load_person_joints(joints_dir: str, sample_id: str):
             if isinstance(data, dict) and 'transl' in data:
                 transl = data['transl']
                 if isinstance(transl, torch.Tensor):
-                    transl = transl.cpu().numpy()
+                    # E.T. smplh tensors have requires_grad=True, must detach
+                    transl = transl.detach().cpu().numpy()
                 transl = np.array(transl, dtype=np.float32)
                 if transl.ndim == 2 and transl.shape[1] >= 3:
                     return transl[:, :3]
                 elif transl.ndim == 1 and transl.shape[0] >= 3:
                     return transl[:3].reshape(1, 3)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[smplh load failed for {sample_id}] {type(e).__name__}: {e}")
 
     # === Fallback: .npy / .npz ===
     for ext in ['.npy', '.npz']:
@@ -199,6 +200,8 @@ def main():
     parser.add_argument('--min-frames', type=int, default=10)
     parser.add_argument('--lookat-distance', type=float, default=3.0,
                         help='Default distance for look-at person proxy')
+    parser.add_argument('--require-person', action='store_true',
+                        help='Skip samples without real person (smplh) data')
     args = parser.parse_args()
 
     et_root = args.et_root
@@ -278,13 +281,18 @@ def main():
         if person_traj is not None:
             person_traj = resample_trajectory(person_traj, args.num_frames)
             stats['has_joints'] += 1
+            has_real_person = True
         else:
+            if args.require_person:
+                stats['skipped'] += 1
+                continue
             # Estimate from camera look-at
             person_positions = np.stack(
                 [extrinsic_to_lookat(R, t, args.lookat_distance) for R, t in frames],
                 axis=0)
             person_traj = resample_trajectory(person_positions, args.num_frames)
             stats['lookat_proxy'] += 1
+            has_real_person = False
 
         # Save
         np.save(os.path.join(cam_out_dir, f'{sample_id}.npy'), camera_traj)
@@ -321,6 +329,7 @@ def main():
             'camera_motion': camera_motion,
             'camera_trajectory_path': f'camera_trajectories/{sample_id}.npy',
             'person_trajectory_path': f'person_trajectories/{sample_id}.npy',
+            'has_real_person': has_real_person,
         }
 
         if sample_id in splits.get('test', set()):
