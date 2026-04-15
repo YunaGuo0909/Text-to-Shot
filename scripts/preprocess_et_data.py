@@ -279,6 +279,11 @@ def main():
             person_traj = load_person_joints(joints_dir, sample_id)
 
         if person_traj is not None:
+            # Skip if NaN/Inf (SLAHMR tracking failures)
+            if not np.isfinite(person_traj).all():
+                person_traj = None
+
+        if person_traj is not None:
             person_traj = resample_trajectory(person_traj, args.num_frames)
             stats['has_joints'] += 1
             has_real_person = True

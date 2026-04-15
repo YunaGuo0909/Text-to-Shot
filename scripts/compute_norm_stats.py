@@ -16,7 +16,7 @@ from tqdm import tqdm
 def main():
     parser = argparse.ArgumentParser(description='Compute normalization stats for joint trajectories')
     parser.add_argument('--data-root', type=str, default='/transfer/stc-data')
-    parser.add_argument('--index-file', type=str, default='train_index_single_person.json')
+    parser.add_argument('--index-file', type=str, default='train_index.json')
     parser.add_argument('--output', type=str, default=None,
                         help='Output path (default: <data-root>/norm_stats.json)')
     parser.add_argument('--num-frames', type=int, default=48)
@@ -56,10 +56,14 @@ def main():
             person = np.stack([np.interp(x_new, x_old, person[:, d]) for d in range(person.shape[1])], axis=1)
         # Joint vector: [person_flat, camera_flat]
         y = np.concatenate([person.flatten(), cam.flatten()])
+        # Skip samples with NaN/Inf (SLAHMR tracking failures)
+        if not np.isfinite(y).all():
+            skipped += 1
+            continue
         all_y.append(y)
 
     if skipped:
-        print(f"Skipped {skipped} samples (missing files)")
+        print(f"Skipped {skipped} samples (missing files or NaN/Inf)")
 
     all_y = np.stack(all_y, axis=0)  # (N, total_dim)
     mean = all_y.mean(axis=0)        # (total_dim,)
