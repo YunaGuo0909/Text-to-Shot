@@ -273,14 +273,19 @@ def main():
         camera_traj = np.stack([extrinsic_to_6d(R, t) for R, t in frames], axis=0)
         camera_traj = resample_trajectory(camera_traj, args.num_frames)
 
+        # Skip camera outliers (extrinsic divergence)
+        if not np.isfinite(camera_traj).all() or np.abs(camera_traj[:, :3]).max() > 100.0:
+            stats['skipped'] += 1
+            continue
+
         # Person trajectory (T, 3)
         person_traj = None
         if joints_dir:
             person_traj = load_person_joints(joints_dir, sample_id)
 
         if person_traj is not None:
-            # Skip if NaN/Inf (SLAHMR tracking failures)
-            if not np.isfinite(person_traj).all():
+            # Skip if NaN/Inf or extreme outliers (SLAHMR divergence)
+            if not np.isfinite(person_traj).all() or np.abs(person_traj).max() > 100.0:
                 person_traj = None
 
         if person_traj is not None:
