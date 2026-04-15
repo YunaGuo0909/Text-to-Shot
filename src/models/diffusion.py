@@ -119,15 +119,24 @@ class GaussianDiffusion(nn.Module):
 
     @torch.no_grad()
     def sample(self, text_embed, shot_type=None, motion_type=None, device='cuda',
-               guidance_scale=1.0):
+               guidance_scale=1.0, use_ddim=False, ddim_steps=50, ddim_eta=0.0):
         """
         Generate joint person-camera trajectory.
 
         Args:
             guidance_scale: CFG scale. 1.0 = no CFG. 3.0-7.0 = typical range.
+            use_ddim: If True, use DDIM deterministic sampling (much smoother).
+            ddim_steps: Number of DDIM sampling steps (default 50).
+            ddim_eta: DDIM stochasticity. 0.0 = fully deterministic.
         Returns:
             y_0: (B, total_dim) = [person_flat (T*3), camera_flat (T*6)]
         """
+        if use_ddim:
+            return self.ddim_sample(text_embed, shot_type=shot_type,
+                                    motion_type=motion_type, device=device,
+                                    guidance_scale=guidance_scale,
+                                    ddim_steps=ddim_steps, ddim_eta=ddim_eta)
+
         batch_size = text_embed.shape[0]
         total_dim = self.denoiser.total_dim
 
@@ -138,5 +147,74 @@ class GaussianDiffusion(nn.Module):
             y_t = self.p_sample(y_t, t_batch, text_embed,
                                 shot_type=shot_type, motion_type=motion_type,
                                 guidance_scale=guidance_scale)
+
+        return y_t
+
+    @torch.no_grad()
+    def _predict_y0(self, y_t, t_batch, text_embed, shot_type=None,
+                    motion_type=None, guidance_scale=1.0):
+        """Predict y_0 from y_t with optional CFG."""
+        if guidance_scale > 1.0:
+            null_embed = torch.zeros_like(text_embed)
+            y_0_null = self.denoiser(y_t, t_batch, null_embed,
+                                     shot_type=None, motion_type=None)
+            y_0_text = self.denoiser(y_t, t_batch, text_embed,
+                                     shot_type=shot_type, motion_type=motion_type)
+            return y_0_null + guidance_scale * (y_0_text - y_0_null)
+        else:
+            return self.denoiser(y_t, t_batch, text_embed,
+                                 shot_type=shot_type, motion_type=motion_type)
+
+    @torch.no_grad()
+    def ddim_sample(self, text_embed, shot_type=None, motion_type=None,
+                    device='cuda', guidance_scale=1.0, ddim_steps=50,
+                    ddim_eta=0.0):
+        """
+        DDIM sampling (Song et al., 2020). Deterministic when eta=0.
+
+        Much smoother than DDPM because it skips most timesteps and
+        avoids adding random noise at each step.
+        """
+        batch_size = text_embed.shape[0]
+        total_dim = self.denoiser.total_dim
+
+        # Build sub-sequence of timesteps: evenly spaced
+        step_size = self.num_timesteps // ddim_steps
+        timesteps = list(range(0, self.num_timesteps, step_size))
+        timesteps = sorted(timesteps, reverse=True)
+
+        y_t = torch.randn(batch_size, total_dim, device=device)
+
+        for i, t in enumerate(timesteps):
+            t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
+
+            y_0_pred = self._predict_y0(y_t, t_batch, text_embed,
+                                        shot_type=shot_type,
+                                        motion_type=motion_type,
+                                        guidance_scale=guidance_scale)
+
+            # Clip predicted y_0 to reasonable range for stability
+            y_0_pred = y_0_pred.clamp(-5.0, 5.0)
+
+            if i < len(timesteps) - 1:
+                t_next = timesteps[i + 1]
+
+                alpha_t = self.alphas_cumprod[t]
+                alpha_next = self.alphas_cumprod[t_next]
+
+                # Predicted noise from y_0 prediction
+                eps_pred = (y_t - torch.sqrt(alpha_t) * y_0_pred) / torch.sqrt(1.0 - alpha_t)
+
+                # DDIM update
+                sigma = ddim_eta * torch.sqrt(
+                    (1.0 - alpha_next) / (1.0 - alpha_t) * (1.0 - alpha_t / alpha_next)
+                )
+                dir_xt = torch.sqrt(1.0 - alpha_next - sigma ** 2) * eps_pred
+                y_t = torch.sqrt(alpha_next) * y_0_pred + dir_xt
+
+                if ddim_eta > 0:
+                    y_t = y_t + sigma * torch.randn_like(y_t)
+            else:
+                y_t = y_0_pred
 
         return y_t

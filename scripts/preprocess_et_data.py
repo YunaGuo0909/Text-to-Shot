@@ -308,7 +308,8 @@ def main():
                 except Exception:
                     pass
 
-        text = caption_cam if caption_cam else caption_full
+        # Prefer full caption (describes both character + camera) for joint model
+        text = caption_full if caption_full else caption_cam
         camera_motion = classify_camera_motion(text)
         shot_type = infer_shot_type(caption_full)
         motion_counts[camera_motion] = motion_counts.get(camera_motion, 0) + 1

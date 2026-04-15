@@ -8,9 +8,14 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import yaml
 import torch
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from src.models.denoiser import JointTrajectoryDenoiser
 from src.models.diffusion import GaussianDiffusion
@@ -97,13 +102,15 @@ def train(config, args):
 
     # Dataset
     train_index = config['data'].get('train_index_file', 'train_index.json')
+    test_index = config['data'].get('test_index_file', 'test_index.json')
     if args.single_person:
         train_index = 'train_index_single_person.json'
+        test_index = 'test_index_single_person.json'
         print(f"Using single-person subset: {train_index}")
 
     norm_stats_path = config['data'].get('norm_stats_path', None)
 
-    dataset = JointTrajectoryDataset(
+    train_dataset = JointTrajectoryDataset(
         data_root=config['data']['data_root'],
         split='train',
         num_frames=traj_cfg['default_num_frames'],
@@ -113,10 +120,29 @@ def train(config, args):
         norm_stats_path=norm_stats_path,
     )
 
-    dataloader = DataLoader(
-        dataset,
+    val_dataset = JointTrajectoryDataset(
+        data_root=config['data']['data_root'],
+        split='test',
+        num_frames=traj_cfg['default_num_frames'],
+        person_dim=model_cfg['person_dim'],
+        camera_dim=model_cfg['camera_dim'],
+        index_file=test_index,
+        norm_stats_path=norm_stats_path,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=config['training']['batch_size'],
         shuffle=True,
+        num_workers=config['data']['num_workers'],
+        pin_memory=config['data']['pin_memory'],
+        collate_fn=collate_fn,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['training']['batch_size'],
+        shuffle=False,
         num_workers=config['data']['num_workers'],
         pin_memory=config['data']['pin_memory'],
         collate_fn=collate_fn,
@@ -130,6 +156,21 @@ def train(config, args):
     )
     if optimizer_state is not None:
         optimizer.load_state_dict(optimizer_state)
+
+    # LR scheduler: linear warmup + cosine decay
+    num_epochs = config['training']['num_epochs']
+    warmup_epochs = config['training'].get('warmup_epochs', 10)
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs
+        progress = (epoch - warmup_epochs) / max(1, num_epochs - warmup_epochs)
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    if start_epoch > 0:
+        for _ in range(start_epoch):
+            scheduler.step()
 
     # CFG dropout probability
     cfg_dropout_prob = config['training'].get('cfg_dropout_prob', 0.1)
@@ -147,31 +188,39 @@ def train(config, args):
     p_dim = model_cfg['person_dim']
     c_dim = model_cfg['camera_dim']
 
+    eval_interval = config['training'].get('eval_interval', 10)
+    log_dir = config['paths'].get('log_dir', '/transfer/stc-logs')
+    os.makedirs(log_dir, exist_ok=True)
+
     print(f"\n{'='*60}")
     print(f"Joint Person-Camera Diffusion Training")
     print(f"{'='*60}")
     print(f"  Parameters: {total_params:,} total, {trainable_params:,} trainable")
     print(f"  Joint dim: person ({T}x{p_dim}={T*p_dim}) + camera ({T}x{c_dim}={T*c_dim}) = {T*(p_dim+c_dim)}")
-    print(f"  Dataset: {len(dataset)} samples | Batch: {config['training']['batch_size']}")
+    print(f"  Train set: {len(train_dataset)} samples | Val set: {len(val_dataset)} samples")
+    print(f"  Batch: {config['training']['batch_size']}")
     print(f"  Text: {'CLIP' if text_encoder else 'Random'}")
     print(f"  Checkpoints: {checkpoint_dir}")
+    print(f"  Logs: {log_dir}")
     print(f"{'='*60}\n")
 
+    train_losses = []
+    val_losses = []
+
     for epoch in range(start_epoch, num_epochs):
+        # ---- Train ----
         diffusion.train()
         total_loss = 0
         num_batches = 0
 
-        for batch in dataloader:
+        for batch in train_loader:
             y = batch['y'].to(device)
 
-            # Text encoding
             if text_encoder is not None:
                 text_embed = text_encoder(batch['texts'])
             else:
                 text_embed = torch.randn(y.shape[0], 512, device=device)
 
-            # Classifier-Free Guidance: randomly drop text conditioning
             if cfg_dropout_prob > 0:
                 drop_mask = torch.rand(y.shape[0], device=device) < cfg_dropout_prob
                 text_embed = text_embed.clone()
@@ -198,8 +247,46 @@ def train(config, args):
             total_loss += loss.item()
             num_batches += 1
 
-        avg_loss = total_loss / max(num_batches, 1)
-        print(f"Epoch [{epoch+1}/{num_epochs}] Loss: {avg_loss:.6f}")
+        avg_train_loss = total_loss / max(num_batches, 1)
+        train_losses.append(avg_train_loss)
+
+        # ---- Validation ----
+        avg_val_loss = float('nan')
+        if len(val_dataset) > 0 and (epoch + 1) % eval_interval == 0:
+            diffusion.eval()
+            val_total = 0
+            val_batches = 0
+            with torch.no_grad():
+                for batch in val_loader:
+                    y = batch['y'].to(device)
+
+                    if text_encoder is not None:
+                        text_embed = text_encoder(batch['texts'])
+                    else:
+                        text_embed = torch.randn(y.shape[0], 512, device=device)
+
+                    shot_types = batch['shot_types'].to(device)
+                    shot_type = shot_types if (shot_types >= 0).all() else None
+                    motion_types = batch['motion_types'].to(device)
+                    motion_type = motion_types if (motion_types >= 0).all() else None
+
+                    loss = diffusion.p_losses(y, text_embed,
+                                              shot_type=shot_type,
+                                              motion_type=motion_type)
+                    val_total += loss.item()
+                    val_batches += 1
+
+            avg_val_loss = val_total / max(val_batches, 1)
+
+        val_losses.append(avg_val_loss)
+
+        current_lr = scheduler.get_last_lr()[0]
+        scheduler.step()
+
+        if np.isnan(avg_val_loss):
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}")
+        else:
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}")
 
         if (epoch + 1) % save_interval == 0:
             ckpt_path = os.path.join(checkpoint_dir, f'stc_epoch{epoch+1}.pth')
@@ -207,21 +294,80 @@ def train(config, args):
                 'epoch': epoch + 1,
                 'model_state_dict': diffusion.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'train_losses': train_losses,
+                'val_losses': val_losses,
                 'config': config,
             }, ckpt_path)
             print(f"  Saved: {ckpt_path}")
 
-    # Final
+    # ---- Save final model ----
     final_path = os.path.join(checkpoint_dir, 'stc_final.pth')
     torch.save({
         'epoch': num_epochs,
         'model_state_dict': diffusion.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'loss': avg_loss,
+        'train_loss': avg_train_loss,
+        'val_loss': avg_val_loss,
+        'train_losses': train_losses,
+        'val_losses': val_losses,
         'config': config,
     }, final_path)
     print(f"\nTraining complete! Final model: {final_path}")
+
+    # ---- Save loss history as JSON ----
+    loss_history = {
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'eval_interval': eval_interval,
+        'num_epochs': num_epochs,
+    }
+    loss_json_path = os.path.join(log_dir, 'loss_history.json')
+    with open(loss_json_path, 'w') as f:
+        json.dump(loss_history, f, indent=2)
+    print(f"Loss history saved: {loss_json_path}")
+
+    # ---- Plot loss curves ----
+    plot_loss_curves(train_losses, val_losses, eval_interval, num_epochs,
+                     save_dir=log_dir)
+
+
+def plot_loss_curves(train_losses, val_losses, eval_interval, num_epochs,
+                     save_dir='.'):
+    """Plot and save train/val loss curves."""
+    epochs = list(range(1, len(train_losses) + 1))
+
+    val_epochs = [e for e, v in zip(epochs, val_losses) if not np.isnan(v)]
+    val_vals = [v for v in val_losses if not np.isnan(v)]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(epochs, train_losses, color='#FF6B6B', linewidth=1.2,
+            alpha=0.85, label='Train Loss')
+    if val_vals:
+        ax.plot(val_epochs, val_vals, color='#4ECDC4', linewidth=2,
+                marker='o', markersize=4, label=f'Val Loss (every {eval_interval} ep)')
+
+    ax.set_xlabel('Epoch', fontsize=12)
+    ax.set_ylabel('Loss (MSE)', fontsize=12)
+    ax.set_title(f'Training & Validation Loss ({num_epochs} epochs)', fontsize=14)
+    ax.legend(fontsize=11)
+    ax.grid(alpha=0.3)
+
+    if val_vals:
+        best_idx = int(np.argmin(val_vals))
+        best_ep, best_val = val_epochs[best_idx], val_vals[best_idx]
+        ax.annotate(f'Best val: {best_val:.4f} (ep {best_ep})',
+                    xy=(best_ep, best_val),
+                    xytext=(best_ep + num_epochs * 0.05, best_val + 0.02),
+                    arrowprops=dict(arrowstyle='->', color='#4ECDC4'),
+                    fontsize=10, color='#4ECDC4')
+
+    plt.tight_layout()
+    save_path = os.path.join(save_dir, 'loss_curve.png')
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Loss curve saved: {save_path}")
 
 
 if __name__ == '__main__':

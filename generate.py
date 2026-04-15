@@ -4,6 +4,7 @@ Inference script: generate joint person-camera trajectories from text.
 Usage:
     python generate.py --checkpoint /transfer/stc-checkpoints/stc_final.pth --text "A person walks toward camera"
     python generate.py --checkpoint /transfer/stc-checkpoints/stc_final.pth --text "Close-up, person stands still" --motion dolly-in
+    python generate.py --checkpoint /transfer/stc-checkpoints/stc_final.pth --text "Wide shot" --ddim --ddim-steps 50
 """
 
 import argparse
@@ -11,6 +12,7 @@ import os
 import time
 import torch
 import numpy as np
+from scipy.signal import savgol_filter
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -107,12 +109,17 @@ def generate(args):
         print(f"  Using norm stats from {norm_stats_path}")
 
     # Generate
+    sampler = "DDIM" if args.ddim else "DDPM"
     print(f"Generating: \"{args.text}\"")
     print(f"  shot={args.shot_type}, motion={args.motion}, guidance_scale={args.guidance_scale}")
+    print(f"  sampler={sampler}, steps={args.ddim_steps if args.ddim else 1000}")
 
     y = diffusion.sample(text_embed, shot_type=shot_type,
                          motion_type=motion_type, device=device,
-                         guidance_scale=args.guidance_scale)
+                         guidance_scale=args.guidance_scale,
+                         use_ddim=args.ddim,
+                         ddim_steps=args.ddim_steps,
+                         ddim_eta=args.ddim_eta)
 
     # Denormalize
     if norm_mean is not None:
@@ -121,6 +128,12 @@ def generate(args):
     y_np = y[0].cpu().numpy()
     person_traj = y_np[:person_total].reshape(num_frames, person_dim)
     camera_traj = y_np[person_total:].reshape(num_frames, camera_dim)
+
+    # Post-processing: smooth trajectories
+    if not args.no_smooth:
+        person_traj = smooth_trajectory(person_traj, window=args.smooth_window)
+        camera_traj = smooth_trajectory(camera_traj, window=args.smooth_window)
+        print(f"  Smoothing applied (window={args.smooth_window})")
 
     # Save trajectories
     output_dir = config['paths']['output_dir']
@@ -135,6 +148,20 @@ def generate(args):
                     save_path=os.path.join(output_dir, f'gen_joint_{tag}.png'))
 
     print(f"Outputs saved to {output_dir}/  [tag: {tag}]")
+
+
+def smooth_trajectory(traj, window=7, polyorder=2):
+    """
+    Savitzky-Golay filter for trajectory smoothing.
+    Preserves the overall shape while removing high-frequency jitter.
+    """
+    if traj.shape[0] < window:
+        return traj
+    smoothed = np.zeros_like(traj)
+    for d in range(traj.shape[1]):
+        smoothed[:, d] = savgol_filter(traj[:, d], window_length=window,
+                                       polyorder=polyorder)
+    return smoothed
 
 
 def visualize_joint(person_traj, camera_traj, text, motion, save_path):
@@ -195,6 +222,18 @@ def main():
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--guidance-scale', type=float, default=3.0,
                         help='Classifier-Free Guidance scale (1.0=off, 3-7=typical)')
+    # DDIM sampling
+    parser.add_argument('--ddim', action='store_true',
+                        help='Use DDIM deterministic sampling (recommended)')
+    parser.add_argument('--ddim-steps', type=int, default=50,
+                        help='Number of DDIM sampling steps')
+    parser.add_argument('--ddim-eta', type=float, default=0.0,
+                        help='DDIM stochasticity (0=deterministic, 1=DDPM-like)')
+    # Smoothing
+    parser.add_argument('--no-smooth', action='store_true',
+                        help='Disable trajectory smoothing post-processing')
+    parser.add_argument('--smooth-window', type=int, default=7,
+                        help='Savitzky-Golay smoothing window size (odd number)')
     args = parser.parse_args()
     generate(args)
 

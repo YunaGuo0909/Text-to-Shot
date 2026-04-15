@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
