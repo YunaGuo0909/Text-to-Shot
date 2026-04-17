@@ -201,9 +201,9 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     ax1.scatter(*person_traj[-1], color='#95E66D', s=80, marker='v',
                 edgecolors='white', linewidths=1.5, zorder=5)
 
-    # Camera orientation arrows (every 8 frames)
+    # Camera orientation arrows in 3D (every few frames, orange)
     arrow_interval = max(1, num_frames // 6)
-    arrow_len_factor = 0.15 * max(
+    arrow_len_factor = 0.25 * max(
         np.ptp(camera_traj[:, :3], axis=0).max(),
         np.ptp(person_traj, axis=0).max(),
         0.5
@@ -213,8 +213,8 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
         az, el = camera_traj[i, 3], camera_traj[i, 4]
         fwd = _camera_forward(az, el) * arrow_len_factor
         ax1.quiver(cx, cy, cz, fwd[0], fwd[1], fwd[2],
-                   color='#FF9F43', arrow_length_ratio=0.3,
-                   linewidth=1.5, alpha=0.8)
+                   color='#FF9F43', arrow_length_ratio=0.35,
+                   linewidth=2.5, alpha=0.9)
 
     # Camera-to-person line at start and end
     for idx, ls, alpha in [(0, '-', 0.4), (-1, '--', 0.3)]:
@@ -248,25 +248,39 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     ax2.scatter(person_traj[-1, 0], person_traj[-1, 2], color='#95E66D',
                 s=70, marker='v', edgecolors='white', zorder=5)
 
-    # Camera direction arrows in top-down
-    arrow_scale_2d = 0.12 * max(
+    # Camera frustum triangles in top-down (shows where camera is looking)
+    scene_extent = max(
         np.ptp(camera_traj[:, 0]), np.ptp(camera_traj[:, 2]),
         np.ptp(person_traj[:, 0]), np.ptp(person_traj[:, 2]),
-        0.3
+        0.5
     )
+    frust_len = scene_extent * 0.15     # how far the triangle tip extends
+    frust_half_w = frust_len * 0.4      # half-width of the triangle base
     for i in range(0, num_frames, arrow_interval):
         cx, cz = camera_traj[i, 0], camera_traj[i, 2]
         az = camera_traj[i, 3]
-        dx = np.sin(az) * arrow_scale_2d
-        dz = -np.cos(az) * arrow_scale_2d
-        ax2.annotate('', xy=(cx + dx, cz + dz), xytext=(cx, cz),
-                     arrowprops=dict(arrowstyle='->', color='#FF9F43',
-                                     lw=1.5, alpha=0.7))
+        # forward direction in XZ plane
+        fx, fz = np.sin(az), -np.cos(az)
+        # perpendicular direction
+        rx, rz = fz, -fx
+        # triangle: tip = forward, two base corners behind
+        tip_x = cx + fx * frust_len
+        tip_z = cz + fz * frust_len
+        bl_x = cx - rx * frust_half_w
+        bl_z = cz - rz * frust_half_w
+        br_x = cx + rx * frust_half_w
+        br_z = cz + rz * frust_half_w
+        tri = plt.Polygon(
+            [[tip_x, tip_z], [bl_x, bl_z], [br_x, br_z]],
+            color='#FF9F43', alpha=0.5, edgecolor='white', linewidth=0.5
+        )
+        ax2.add_patch(tri)
 
-    # Camera-to-person line at start
-    ax2.plot([camera_traj[0, 0], person_traj[0, 0]],
-             [camera_traj[0, 2], person_traj[0, 2]],
-             color='white', linewidth=1, linestyle=':', alpha=0.3)
+    # Camera-to-person line at start and end
+    for idx, ls, alpha in [(0, ':', 0.4), (-1, ':', 0.25)]:
+        ax2.plot([camera_traj[idx, 0], person_traj[idx, 0]],
+                 [camera_traj[idx, 2], person_traj[idx, 2]],
+                 color='white', linewidth=1, linestyle=ls, alpha=alpha)
 
     ax2.set_xlabel('X', color='gray', fontsize=9)
     ax2.set_ylabel('Z', color='gray', fontsize=9)
