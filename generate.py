@@ -164,48 +164,169 @@ def smooth_trajectory(traj, window=7, polyorder=2):
     return smoothed
 
 
+def _camera_forward(az, el):
+    """Compute camera forward direction from azimuth and elevation (radians)."""
+    dx = np.cos(el) * np.sin(az)
+    dy = -np.sin(el)
+    dz = -np.cos(el) * np.cos(az)
+    return np.array([dx, dy, dz])
+
+
 def visualize_joint(person_traj, camera_traj, text, motion, save_path):
-    """Plot person and camera trajectories in 3D and parameter curves."""
-    fig = plt.figure(figsize=(16, 6), facecolor='#1a1a2e')
+    """
+    Enhanced visualization: 3D view with camera orientation arrows,
+    top-down view, camera parameter curves, and person position curves.
+    """
+    num_frames = len(camera_traj)
+    t_axis = np.linspace(0, 1, num_frames)
 
-    # 3D paths
-    ax1 = fig.add_subplot(131, projection='3d', facecolor='#1a1a2e')
+    fig = plt.figure(figsize=(20, 10), facecolor='#1a1a2e')
+
+    # ---- Panel 1: 3D trajectories with camera orientation ----
+    ax1 = fig.add_subplot(231, projection='3d', facecolor='#1a1a2e')
+
+    # Trajectory lines
     ax1.plot3D(camera_traj[:, 0], camera_traj[:, 1], camera_traj[:, 2],
-               color='#FFE66D', linewidth=2, label='Camera')
+               color='#FFE66D', linewidth=2, label='Camera path', alpha=0.9)
     ax1.plot3D(person_traj[:, 0], person_traj[:, 1], person_traj[:, 2],
-               color='#4ECDC4', linewidth=2, label='Person')
-    ax1.scatter(*camera_traj[0, :3], color='#FFE66D', s=60, marker='o', edgecolors='white')
-    ax1.scatter(*person_traj[0], color='#4ECDC4', s=60, marker='^', edgecolors='white')
-    ax1.set_title('3D Trajectories', color='white', fontsize=11)
-    ax1.legend(fontsize=8, labelcolor='white', framealpha=0.3)
-    ax1.tick_params(colors='gray', labelsize=7)
+               color='#4ECDC4', linewidth=2, label='Person path', alpha=0.9)
 
-    # Camera parameters
-    ax2 = fig.add_subplot(132, facecolor='#2C3E50')
-    t = np.linspace(0, 1, len(camera_traj))
-    names = ['tx', 'ty', 'tz', 'az', 'el', 'roll']
-    colors = ['#FF6B6B', '#FFE66D', '#4ECDC4', '#C44ECD', '#95E66D', '#FF9F43']
-    for i, (name, c) in enumerate(zip(names, colors)):
-        ax2.plot(t, camera_traj[:, i], color=c, linewidth=1.5, label=name, alpha=0.8)
-    ax2.set_title('Camera Parameters', color='white', fontsize=11)
-    ax2.legend(fontsize=7, labelcolor='white', framealpha=0.3, ncol=2)
+    # Start and end markers
+    ax1.scatter(*camera_traj[0, :3], color='#FFE66D', s=80, marker='o',
+                edgecolors='white', linewidths=1.5, zorder=5, label='Cam start')
+    ax1.scatter(*camera_traj[-1, :3], color='#FF6B6B', s=80, marker='s',
+                edgecolors='white', linewidths=1.5, zorder=5, label='Cam end')
+    ax1.scatter(*person_traj[0], color='#4ECDC4', s=80, marker='^',
+                edgecolors='white', linewidths=1.5, zorder=5)
+    ax1.scatter(*person_traj[-1], color='#95E66D', s=80, marker='v',
+                edgecolors='white', linewidths=1.5, zorder=5)
+
+    # Camera orientation arrows (every 8 frames)
+    arrow_interval = max(1, num_frames // 6)
+    arrow_len_factor = 0.15 * max(
+        np.ptp(camera_traj[:, :3], axis=0).max(),
+        np.ptp(person_traj, axis=0).max(),
+        0.5
+    )
+    for i in range(0, num_frames, arrow_interval):
+        cx, cy, cz = camera_traj[i, :3]
+        az, el = camera_traj[i, 3], camera_traj[i, 4]
+        fwd = _camera_forward(az, el) * arrow_len_factor
+        ax1.quiver(cx, cy, cz, fwd[0], fwd[1], fwd[2],
+                   color='#FF9F43', arrow_length_ratio=0.3,
+                   linewidth=1.5, alpha=0.8)
+
+    # Camera-to-person line at start and end
+    for idx, ls, alpha in [(0, '-', 0.4), (-1, '--', 0.3)]:
+        ax1.plot3D(
+            [camera_traj[idx, 0], person_traj[idx, 0]],
+            [camera_traj[idx, 1], person_traj[idx, 1]],
+            [camera_traj[idx, 2], person_traj[idx, 2]],
+            color='white', linewidth=1, linestyle=ls, alpha=alpha
+        )
+
+    ax1.set_title('3D Trajectories + Camera Direction', color='white', fontsize=10)
+    ax1.legend(fontsize=7, labelcolor='white', framealpha=0.3, loc='upper left')
+    ax1.tick_params(colors='gray', labelsize=6)
+
+    # ---- Panel 2: Top-down (XZ) view ----
+    ax2 = fig.add_subplot(232, facecolor='#2C3E50')
+
+    # Paths
+    ax2.plot(camera_traj[:, 0], camera_traj[:, 2], color='#FFE66D',
+             linewidth=2, label='Camera', alpha=0.9)
+    ax2.plot(person_traj[:, 0], person_traj[:, 2], color='#4ECDC4',
+             linewidth=2, label='Person', alpha=0.9)
+
+    # Start/end markers
+    ax2.scatter(camera_traj[0, 0], camera_traj[0, 2], color='#FFE66D',
+                s=70, marker='o', edgecolors='white', zorder=5)
+    ax2.scatter(camera_traj[-1, 0], camera_traj[-1, 2], color='#FF6B6B',
+                s=70, marker='s', edgecolors='white', zorder=5)
+    ax2.scatter(person_traj[0, 0], person_traj[0, 2], color='#4ECDC4',
+                s=70, marker='^', edgecolors='white', zorder=5)
+    ax2.scatter(person_traj[-1, 0], person_traj[-1, 2], color='#95E66D',
+                s=70, marker='v', edgecolors='white', zorder=5)
+
+    # Camera direction arrows in top-down
+    arrow_scale_2d = 0.12 * max(
+        np.ptp(camera_traj[:, 0]), np.ptp(camera_traj[:, 2]),
+        np.ptp(person_traj[:, 0]), np.ptp(person_traj[:, 2]),
+        0.3
+    )
+    for i in range(0, num_frames, arrow_interval):
+        cx, cz = camera_traj[i, 0], camera_traj[i, 2]
+        az = camera_traj[i, 3]
+        dx = np.sin(az) * arrow_scale_2d
+        dz = -np.cos(az) * arrow_scale_2d
+        ax2.annotate('', xy=(cx + dx, cz + dz), xytext=(cx, cz),
+                     arrowprops=dict(arrowstyle='->', color='#FF9F43',
+                                     lw=1.5, alpha=0.7))
+
+    # Camera-to-person line at start
+    ax2.plot([camera_traj[0, 0], person_traj[0, 0]],
+             [camera_traj[0, 2], person_traj[0, 2]],
+             color='white', linewidth=1, linestyle=':', alpha=0.3)
+
+    ax2.set_xlabel('X', color='gray', fontsize=9)
+    ax2.set_ylabel('Z', color='gray', fontsize=9)
+    ax2.set_title('Top-Down View (XZ) + Look Direction', color='white', fontsize=10)
+    ax2.legend(fontsize=7, labelcolor='white', framealpha=0.3)
     ax2.tick_params(colors='gray', labelsize=7)
+    ax2.set_aspect('equal', adjustable='datalim')
     ax2.grid(alpha=0.15)
 
-    # Person position
-    ax3 = fig.add_subplot(133, facecolor='#2C3E50')
-    pnames = ['px', 'py', 'pz']
-    pcolors = ['#4ECDC4', '#95E66D', '#C44ECD']
-    for i, (name, c) in enumerate(zip(pnames, pcolors)):
-        ax3.plot(t, person_traj[:, i], color=c, linewidth=1.5, label=name)
-    ax3.set_title('Person Position', color='white', fontsize=11)
+    # ---- Panel 3: Camera position over time ----
+    ax3 = fig.add_subplot(233, facecolor='#2C3E50')
+    for i, (name, c) in enumerate(zip(['tx', 'ty', 'tz'],
+                                       ['#FF6B6B', '#FFE66D', '#4ECDC4'])):
+        ax3.plot(t_axis, camera_traj[:, i], color=c, linewidth=1.5, label=name)
+    ax3.set_title('Camera Position', color='white', fontsize=10)
+    ax3.set_xlabel('time', color='gray', fontsize=8)
     ax3.legend(fontsize=8, labelcolor='white', framealpha=0.3)
     ax3.tick_params(colors='gray', labelsize=7)
     ax3.grid(alpha=0.15)
 
-    title = f'{motion} | "{text[:60]}"'
-    fig.suptitle(title, color='white', fontsize=12, fontweight='bold')
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    # ---- Panel 4: Camera orientation over time ----
+    ax4 = fig.add_subplot(234, facecolor='#2C3E50')
+    for i, (name, c) in enumerate(zip(['azimuth', 'elevation', 'roll'],
+                                       ['#C44ECD', '#95E66D', '#FF9F43'])):
+        ax4.plot(t_axis, np.degrees(camera_traj[:, 3 + i]), color=c,
+                 linewidth=1.5, label=name)
+    ax4.set_title('Camera Orientation (degrees)', color='white', fontsize=10)
+    ax4.set_xlabel('time', color='gray', fontsize=8)
+    ax4.set_ylabel('degrees', color='gray', fontsize=8)
+    ax4.legend(fontsize=8, labelcolor='white', framealpha=0.3)
+    ax4.tick_params(colors='gray', labelsize=7)
+    ax4.grid(alpha=0.15)
+
+    # ---- Panel 5: Person position over time ----
+    ax5 = fig.add_subplot(235, facecolor='#2C3E50')
+    for i, (name, c) in enumerate(zip(['px', 'py', 'pz'],
+                                       ['#4ECDC4', '#95E66D', '#C44ECD'])):
+        ax5.plot(t_axis, person_traj[:, i], color=c, linewidth=1.5, label=name)
+    ax5.set_title('Person Position', color='white', fontsize=10)
+    ax5.set_xlabel('time', color='gray', fontsize=8)
+    ax5.legend(fontsize=8, labelcolor='white', framealpha=0.3)
+    ax5.tick_params(colors='gray', labelsize=7)
+    ax5.grid(alpha=0.15)
+
+    # ---- Panel 6: Camera-to-person distance over time ----
+    ax6 = fig.add_subplot(236, facecolor='#2C3E50')
+    dist = np.linalg.norm(camera_traj[:, :3] - person_traj[:, :3], axis=1)
+    ax6.plot(t_axis, dist, color='#FF6B6B', linewidth=2, label='distance')
+    ax6.fill_between(t_axis, 0, dist, color='#FF6B6B', alpha=0.15)
+    ax6.set_title('Camera-Person Distance', color='white', fontsize=10)
+    ax6.set_xlabel('time', color='gray', fontsize=8)
+    ax6.set_ylabel('metres', color='gray', fontsize=8)
+    ax6.legend(fontsize=8, labelcolor='white', framealpha=0.3)
+    ax6.tick_params(colors='gray', labelsize=7)
+    ax6.grid(alpha=0.15)
+
+    # Title
+    title = f'{motion} | "{text[:70]}"'
+    fig.suptitle(title, color='white', fontsize=13, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"Visualization saved to {save_path}")

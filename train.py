@@ -130,10 +130,20 @@ def train(config, args):
         norm_stats_path=norm_stats_path,
     )
 
+    # Class-balanced sampling by motion_type to combat severe imbalance
+    # (static=67%, dolly-out=0.4% → without balancing, model learns "average")
+    from torch.utils.data import WeightedRandomSampler
+    from collections import Counter
+    motion_labels = [s.get('camera_motion', 'static') for s in train_dataset.samples]
+    label_counts = Counter(motion_labels)
+    weight_per_label = {label: 1.0 / count for label, count in label_counts.items()}
+    sample_weights = [weight_per_label[label] for label in motion_labels]
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_dataset), replacement=True)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['training']['batch_size'],
-        shuffle=True,
+        sampler=sampler,   # replaces shuffle=True
         num_workers=config['data']['num_workers'],
         pin_memory=config['data']['pin_memory'],
         collate_fn=collate_fn,

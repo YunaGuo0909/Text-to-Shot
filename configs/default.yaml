@@ -16,7 +16,7 @@ model:
   # Number of attention heads
   num_heads: 4
   # Dropout rate
-  dropout: 0.1
+  dropout: 0.2
 
 # --- Diffusion Settings ---
 diffusion:
@@ -63,13 +63,13 @@ training:
   batch_size: 64
   learning_rate: 0.0001
   weight_decay: 0.0001
-  num_epochs: 500
+  num_epochs: 250
   lr_scheduler: cosine
   warmup_epochs: 10
   gradient_clip: 1.0
-  save_interval: 50
+  save_interval: 25
   eval_interval: 10
-  cfg_dropout_prob: 0.1   # Classifier-Free Guidance: drop text with this prob during training
+  cfg_dropout_prob: 0.25   # Classifier-Free Guidance: higher = stronger CFG at inference
 
 # --- Data ---
 data:

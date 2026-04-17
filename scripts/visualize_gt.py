@@ -39,52 +39,19 @@ def main():
         motion = sample.get('camera_motion', '?')
         sid = sample.get('id', str(i))
 
-        fig = plt.figure(figsize=(16, 6), facecolor='#1a1a2e')
-
-        # 3D
-        ax1 = fig.add_subplot(131, projection='3d', facecolor='#1a1a2e')
-        ax1.plot3D(cam[:, 0], cam[:, 1], cam[:, 2], color='#FFE66D', lw=2, label='Camera')
-        ax1.plot3D(per[:, 0], per[:, 1], per[:, 2], color='#4ECDC4', lw=2, label='Person')
-        ax1.scatter(*cam[0, :3], color='#FFE66D', s=60, marker='o', edgecolors='white')
-        ax1.scatter(*per[0], color='#4ECDC4', s=60, marker='^', edgecolors='white')
-        ax1.set_title('3D Trajectories', color='white', fontsize=11)
-        ax1.legend(fontsize=8, labelcolor='white', framealpha=0.3)
-        ax1.tick_params(colors='gray', labelsize=7)
-
-        # Camera params
-        ax2 = fig.add_subplot(132, facecolor='#2C3E50')
-        t = np.linspace(0, 1, len(cam))
-        names = ['tx', 'ty', 'tz', 'az', 'el', 'roll']
-        colors = ['#FF6B6B', '#FFE66D', '#4ECDC4', '#C44ECD', '#95E66D', '#FF9F43']
-        for j, (name, c) in enumerate(zip(names, colors)):
-            ax2.plot(t, cam[:, j], color=c, lw=1.5, label=name, alpha=0.8)
-        ax2.set_title('Camera Parameters', color='white', fontsize=11)
-        ax2.legend(fontsize=7, labelcolor='white', framealpha=0.3, ncol=2)
-        ax2.tick_params(colors='gray', labelsize=7)
-        ax2.grid(alpha=0.15)
-
-        # Person
-        ax3 = fig.add_subplot(133, facecolor='#2C3E50')
-        pnames = ['px', 'py', 'pz']
-        pcolors = ['#4ECDC4', '#95E66D', '#C44ECD']
-        for j, (name, c) in enumerate(zip(pnames, pcolors)):
-            ax3.plot(t, per[:, j], color=c, lw=1.5, label=name)
-        ax3.set_title('Person Position', color='white', fontsize=11)
-        ax3.legend(fontsize=8, labelcolor='white', framealpha=0.3)
-        ax3.tick_params(colors='gray', labelsize=7)
-        ax3.grid(alpha=0.15)
-
-        title = f'GT | {motion} | "{text}"'
-        fig.suptitle(title, color='white', fontsize=11, fontweight='bold')
-        plt.tight_layout(rect=[0, 0, 1, 0.93])
+        # Use the same enhanced visualisation as generate.py
+        import sys, os as _os
+        sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        from generate import visualize_joint
 
         save_path = os.path.join(args.output_dir, f'gt_{motion}_{i}.png')
-        fig.savefig(save_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close(fig)
+        title_text = f'[GT] {text}'
+        visualize_joint(per, cam, title_text, motion, save_path)
+
         print(f"[{i+1}] {sid}: {text}")
         print(f"    cam range: {cam.min():.2f} ~ {cam.max():.2f}")
         print(f"    per range: {per.min():.2f} ~ {per.max():.2f}")
-        print(f"    → {save_path}")
+        print(f"    -> {save_path}")
 
 
 if __name__ == '__main__':
