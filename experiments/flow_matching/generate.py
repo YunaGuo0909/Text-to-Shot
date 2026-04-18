@@ -138,7 +138,10 @@ def generate(args):
         np.save(os.path.join(output_dir, f'fm_person_{tag}.npy'), person_traj)
         np.save(os.path.join(output_dir, f'fm_camera_{tag}.npy'), camera_traj)
 
-        from generate import visualize_joint
+        import importlib, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        _gen = importlib.import_module('generate')
+        visualize_joint = _gen.visualize_joint
         visualize_joint(person_traj, camera_traj, prompt, args.motion,
                         save_path=os.path.join(output_dir, f'fm_joint_{tag}.png'))
 
