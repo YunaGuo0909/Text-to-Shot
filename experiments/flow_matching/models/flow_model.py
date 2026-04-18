@@ -28,7 +28,10 @@ class ConditionalFlowMatching(nn.Module):
         x_t = (1.0 - t.unsqueeze(-1)) * epsilon + t.unsqueeze(-1) * x_0
         v_target = x_0 - epsilon
 
-        t_scaled = (t * 999).long()
+        # Map flow matching t to DDPM timestep convention:
+        # FM t=0 (noise) → DDPM timestep=999 (noise)
+        # FM t=1 (data)  → DDPM timestep=0   (clean)
+        t_scaled = ((1.0 - t) * 999).long()
         v_pred = self.denoiser(x_t, t_scaled, text_embed,
                                shot_type=shot_type, motion_type=motion_type)
 
@@ -45,7 +48,8 @@ class ConditionalFlowMatching(nn.Module):
 
         for i in range(num_steps):
             t = i * dt
-            t_batch = torch.full((B,), int(t * 999), device=device, dtype=torch.long)
+            # Same convention fix: FM t → DDPM timestep
+            t_batch = torch.full((B,), int((1.0 - t) * 999), device=device, dtype=torch.long)
 
             if guidance_scale > 1.0:
                 null_embed = torch.zeros_like(text_embed)
