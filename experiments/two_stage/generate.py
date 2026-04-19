@@ -214,15 +214,21 @@ def generate(args):
     device = args.device if torch.cuda.is_available() else 'cpu'
     print(f"Device: {device}")
 
-    # Load both stages
-    print("Loading Stage 1...")
-    stage1_diffusion, stage1_config = load_stage1(args.stage1_ckpt, device)
+    # Load models
+    stage1_diffusion = None
+    stage1_config = None
+    if args.stage1_ckpt and not args.use_gt_person:
+        print("Loading Stage 1...")
+        stage1_diffusion, stage1_config = load_stage1(args.stage1_ckpt, device)
+
     print("Loading Stage 2...")
     stage2_diffusion, stage2_config = load_stage2(args.stage2_ckpt, device)
 
-    person_dim = stage1_config['model']['person_dim']
-    camera_dim = stage2_config['model']['camera_dim']
-    num_frames = stage1_config['trajectory']['default_num_frames']
+    # Get dims from whichever config is available
+    ref_config = stage1_config if stage1_config else stage2_config
+    person_dim = ref_config['model']['person_dim']
+    camera_dim = ref_config['model']['camera_dim']
+    num_frames = ref_config['trajectory']['default_num_frames']
     person_total = person_dim * num_frames
     camera_total = camera_dim * num_frames
 
@@ -230,7 +236,7 @@ def generate(args):
     text_encoder = None
     try:
         from src.models.text_encoder import CLIPTextEncoder
-        model_name = stage1_config['text_encoder']['model_name']
+        model_name = ref_config['text_encoder']['model_name']
         text_encoder = CLIPTextEncoder(model_name=model_name, device=device).to(device)
         print("CLIP loaded.")
     except Exception:
@@ -247,7 +253,7 @@ def generate(args):
 
     # Load norm stats
     norm_mean = norm_std = None
-    norm_stats_path = stage1_config['data'].get('norm_stats_path', None)
+    norm_stats_path = ref_config['data'].get('norm_stats_path', None)
     if norm_stats_path and os.path.exists(norm_stats_path):
         with open(norm_stats_path, 'r') as f:
             stats = json.load(f)
@@ -261,15 +267,39 @@ def generate(args):
     print(f"  motion={args.motion}, guidance_s1={args.guidance_scale_s1}, guidance_s2={args.guidance_scale_s2}")
     print(f"  sampler={sampler_name}, steps={steps}")
 
-    # Stage 1: Text -> Person trajectory
-    print("\n--- Stage 1: Generating person trajectory ---")
-    t0 = time.time()
-    person_flat = stage1_diffusion.sample(
-        text_embed, motion_type=motion_type, device=device,
-        guidance_scale=args.guidance_scale_s1,
-        use_ddim=args.ddim, ddim_steps=args.ddim_steps, ddim_eta=args.ddim_eta,
-    )
-    print(f"  Stage 1 done in {time.time() - t0:.1f}s")
+    # Stage 1: Text -> Person trajectory (or use GT)
+    if args.use_gt_person:
+        print("\n--- Using GT person trajectory (skipping Stage 1) ---")
+        from src.data.dataset import JointTrajectoryDataset
+        gt_dataset = JointTrajectoryDataset(
+            data_root=stage2_config['data']['data_root'],
+            split='test', num_frames=num_frames,
+            person_dim=person_dim, camera_dim=camera_dim,
+            index_file=stage2_config['data'].get('test_index_file', 'test_index.json'),
+            norm_stats_path=stage2_config['data'].get('norm_stats_path', None),
+        )
+        # Filter by motion type if possible
+        target_motion = args.motion
+        found_idx = args.gt_sample_idx
+        for i, s in enumerate(gt_dataset.samples):
+            if s.get('camera_motion') == target_motion:
+                found_idx = i
+                break
+        gt_sample = gt_dataset[found_idx]
+        gt_y = gt_sample['y']  # already normalized
+        person_flat = gt_y[:person_total].unsqueeze(0).to(device)
+        gt_text = gt_sample['text']
+        print(f"  GT sample [{found_idx}]: {gt_text[:80]}")
+        print(f"  GT motion: {gt_dataset.samples[found_idx].get('camera_motion', '?')}")
+    else:
+        print("\n--- Stage 1: Generating person trajectory ---")
+        t0 = time.time()
+        person_flat = stage1_diffusion.sample(
+            text_embed, motion_type=motion_type, device=device,
+            guidance_scale=args.guidance_scale_s1,
+            use_ddim=args.ddim, ddim_steps=args.ddim_steps, ddim_eta=args.ddim_eta,
+        )
+        print(f"  Stage 1 done in {time.time() - t0:.1f}s")
 
     # Stage 2: Text + Person -> Camera trajectory
     print("--- Stage 2: Generating camera trajectory ---")
@@ -317,8 +347,13 @@ def generate(args):
 
 def main():
     parser = argparse.ArgumentParser(description='Two-Stage Generation')
-    parser.add_argument('--stage1-ckpt', type=str, required=True)
+    parser.add_argument('--stage1-ckpt', type=str, default=None,
+                        help='Stage 1 checkpoint (not needed if --use-gt-person)')
     parser.add_argument('--stage2-ckpt', type=str, required=True)
+    parser.add_argument('--use-gt-person', action='store_true',
+                        help='Use GT person trajectory from test set (skip Stage 1)')
+    parser.add_argument('--gt-sample-idx', type=int, default=0,
+                        help='Which test sample to use for GT person trajectory')
     parser.add_argument('--text', type=str, required=True)
     parser.add_argument('--motion', type=str, default='static',
                         choices=list(MOTION_TYPE_MAP.keys()))
