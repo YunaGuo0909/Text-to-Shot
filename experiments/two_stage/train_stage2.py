@@ -216,9 +216,55 @@ def train(config, args):
             motion_types = batch['motion_types'].to(device)
             motion_type = motion_types if (motion_types >= 0).all() else None
 
-            loss = diffusion.p_losses(camera_y, text_embed,
-                                      motion_type=motion_type,
-                                      person_traj=person_traj)
+            diffusion_loss = diffusion.p_losses(camera_y, text_embed,
+                                               motion_type=motion_type,
+                                               person_traj=person_traj)
+
+            # === Auxiliary loss: distance direction consistency ===
+            # For low-noise timesteps, the model's y_0 prediction should have
+            # correct distance-change direction relative to motion_type.
+            # This prevents the model from collapsing to a mean trajectory.
+            aux_loss = torch.tensor(0.0, device=device)
+            aux_weight = config['training'].get('aux_loss_weight', 0.1)
+
+            if motion_type is not None and aux_weight > 0:
+                # Get model prediction at a low noise level (t ~ 50)
+                B = camera_y.shape[0]
+                t_low = torch.full((B,), 50, device=device, dtype=torch.long)
+                noise = torch.randn_like(camera_y)
+                y_t = diffusion.q_sample(camera_y, t_low, noise)
+                y_0_pred = diffusion.denoiser(y_t, t_low, text_embed,
+                                              motion_type=motion_type,
+                                              person_traj=person_traj)
+
+                # Reshape predicted camera to (B, T, 6)
+                cam_pred = y_0_pred.reshape(B, num_frames, camera_dim)
+                per_cond = person_traj.reshape(B, num_frames, person_dim)
+
+                # Distance at first and last quarter
+                quarter = num_frames // 4
+                dist_start = torch.norm(cam_pred[:, :quarter, :3] - per_cond[:, :quarter, :], dim=-1).mean(dim=1)
+                dist_end = torch.norm(cam_pred[:, -quarter:, :3] - per_cond[:, -quarter:, :], dim=-1).mean(dim=1)
+                dist_change = dist_end - dist_start  # positive = moving away
+
+                # Target direction per motion_type:
+                #   dolly-in (1) → distance should decrease → target = -1
+                #   dolly-out (2) → distance should increase → target = +1
+                #   static (0) → distance should stay → target = 0
+                #   others → no constraint → target = 0 (soft)
+                target_dir = torch.zeros(B, device=device)
+                target_dir[motion_type == 1] = -1.0   # dolly-in
+                target_dir[motion_type == 2] = 1.0    # dolly-out
+
+                # Only apply loss where we have a direction target
+                has_target = (motion_type == 1) | (motion_type == 2)
+                if has_target.any():
+                    # Hinge-like: penalize if sign is wrong
+                    margin = 0.1
+                    direction_error = torch.clamp(margin - dist_change * target_dir, min=0.0)
+                    aux_loss = direction_error[has_target].mean()
+
+            loss = diffusion_loss + aux_weight * aux_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -266,9 +312,9 @@ def train(config, args):
         scheduler.step()
 
         if np.isnan(avg_val_loss):
-            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}  aux: {aux_loss.item():.4f}")
         else:
-            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}  aux: {aux_loss.item():.4f}")
 
         if (epoch + 1) % save_interval == 0:
             ckpt_path = os.path.join(checkpoint_dir, f'stage2_epoch{epoch+1}.pth')
