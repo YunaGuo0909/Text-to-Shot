@@ -224,9 +224,48 @@ def train(config, args):
             motion_types = batch['motion_types'].to(device)
             motion_type = motion_types if (motion_types >= 0).all() else None
 
-            loss = flow.flow_loss(y, text_embed,
-                                  shot_type=shot_type,
-                                  motion_type=motion_type)
+            flow_loss = flow.flow_loss(y, text_embed,
+                                      shot_type=shot_type,
+                                      motion_type=motion_type)
+
+            # === Auxiliary loss: distance direction for dolly-in/out ===
+            # Apply on MODEL PREDICTION at medium-high noise, not GT data
+            aux_loss = torch.tensor(0.0, device=device)
+            aux_weight = train_cfg.get('aux_loss_weight', 0.1)
+
+            if motion_type is not None and aux_weight > 0:
+                B = y.shape[0]
+                person_total = T * p_dim
+
+                # Get model prediction at random noise level
+                t_aux = torch.rand(B, device=device) * 0.6 + 0.2  # t in [0.2, 0.8]
+                eps = torch.randn_like(y)
+                y_t = (1.0 - t_aux.unsqueeze(-1)) * eps + t_aux.unsqueeze(-1) * y
+                t_scaled = ((1.0 - t_aux) * 999).long()
+                v_pred = flow.denoiser(y_t, t_scaled, text_embed,
+                                       shot_type=shot_type, motion_type=motion_type)
+                # Estimate y_0 from velocity: y_0 ≈ y_t + v * (1 - t)
+                y_0_est = y_t + v_pred * (1.0 - t_aux.unsqueeze(-1))
+
+                person_part = y_0_est[:, :person_total].reshape(B, T, p_dim)
+                camera_part = y_0_est[:, person_total:].reshape(B, T, c_dim)
+
+                quarter = T // 4
+                dist_start = torch.norm(camera_part[:, :quarter, :3] - person_part[:, :quarter, :], dim=-1).mean(dim=1)
+                dist_end = torch.norm(camera_part[:, -quarter:, :3] - person_part[:, -quarter:, :], dim=-1).mean(dim=1)
+                dist_change = dist_end - dist_start
+
+                target_dir = torch.zeros(B, device=device)
+                target_dir[motion_type == 1] = -1.0   # dolly-in
+                target_dir[motion_type == 2] = 1.0    # dolly-out
+
+                has_target = (motion_type == 1) | (motion_type == 2)
+                if has_target.any():
+                    margin = 0.1
+                    direction_error = torch.clamp(margin - dist_change * target_dir, min=0.0)
+                    aux_loss = direction_error[has_target].mean()
+
+            loss = flow_loss + aux_weight * aux_loss
 
             optimizer.zero_grad()
             loss.backward()

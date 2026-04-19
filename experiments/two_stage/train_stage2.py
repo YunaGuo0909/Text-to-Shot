@@ -228,12 +228,13 @@ def train(config, args):
             aux_weight = config['training'].get('aux_loss_weight', 0.1)
 
             if motion_type is not None and aux_weight > 0:
-                # Get model prediction at a low noise level (t ~ 50)
+                # Get model prediction at RANDOM noise levels (including high noise
+                # where mode collapse actually happens)
                 B = camera_y.shape[0]
-                t_low = torch.full((B,), 50, device=device, dtype=torch.long)
+                t_aux = torch.randint(200, 800, (B,), device=device)
                 noise = torch.randn_like(camera_y)
-                y_t = diffusion.q_sample(camera_y, t_low, noise)
-                y_0_pred = diffusion.denoiser(y_t, t_low, text_embed,
+                y_t = diffusion.q_sample(camera_y, t_aux, noise)
+                y_0_pred = diffusion.denoiser(y_t, t_aux, text_embed,
                                               motion_type=motion_type,
                                               person_traj=person_traj)
 

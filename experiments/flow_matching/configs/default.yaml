@@ -51,6 +51,7 @@ training:
   save_interval: 25
   eval_interval: 10
   cfg_dropout_prob: 0.25
+  aux_loss_weight: 0.1
   augmentation: true
 
 data:
