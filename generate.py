@@ -132,8 +132,10 @@ def generate(args):
     # Post-processing: smooth trajectories
     if not args.no_smooth:
         person_traj = smooth_trajectory(person_traj, window=args.smooth_window)
-        camera_traj = smooth_trajectory(camera_traj, window=args.smooth_window)
-        print(f"  Smoothing applied (window={args.smooth_window})")
+        # Camera: angles (dims 3,4,5 = az,el,roll) get stronger smoothing
+        camera_traj = smooth_trajectory(camera_traj, window=args.smooth_window,
+                                        angle_dims=[3, 4, 5], angle_window=31)
+        print(f"  Smoothing applied (position window={args.smooth_window}, angle window=31)")
 
     # Save trajectories
     output_dir = config['paths']['output_dir']
@@ -150,17 +152,26 @@ def generate(args):
     print(f"Outputs saved to {output_dir}/  [tag: {tag}]")
 
 
-def smooth_trajectory(traj, window=7, polyorder=2):
+def smooth_trajectory(traj, window=7, polyorder=2, angle_dims=None, angle_window=21):
     """
-    Savitzky-Golay filter for trajectory smoothing.
-    Preserves the overall shape while removing high-frequency jitter.
+    Savitzky-Golay filter. Angle dimensions get a larger window for extra smoothness
+    (camera orientation should change slowly in real cinematography).
+
+    angle_dims: list of column indices that are angles (e.g. [3,4,5] for az/el/roll)
+    angle_window: larger window for angle dims (must be odd, >= window)
     """
     if traj.shape[0] < window:
         return traj
     smoothed = np.zeros_like(traj)
     for d in range(traj.shape[1]):
-        smoothed[:, d] = savgol_filter(traj[:, d], window_length=window,
-                                       polyorder=polyorder)
+        if angle_dims and d in angle_dims:
+            w = min(angle_window, traj.shape[0] if traj.shape[0] % 2 == 1 else traj.shape[0] - 1)
+            w = w if w % 2 == 1 else w - 1
+            w = max(w, window)
+            smoothed[:, d] = savgol_filter(traj[:, d], window_length=w, polyorder=polyorder)
+        else:
+            smoothed[:, d] = savgol_filter(traj[:, d], window_length=window,
+                                           polyorder=polyorder)
     return smoothed
 
 

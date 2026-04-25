@@ -228,44 +228,46 @@ def train(config, args):
                                       shot_type=shot_type,
                                       motion_type=motion_type)
 
-            # === Auxiliary loss: distance direction for dolly-in/out ===
-            # Apply on MODEL PREDICTION at medium-high noise, not GT data
-            aux_loss = torch.tensor(0.0, device=device)
-            aux_weight = train_cfg.get('aux_loss_weight', 0.1)
-
-            if motion_type is not None and aux_weight > 0:
+            # === Loss 1: Temporal smoothness on GT camera angles ===
+            # Data analysis shows GT angles are extremely smooth (median 0.001 deg/frame).
+            # Penalising large frame-to-frame angle changes trains the model to match this.
+            smooth_weight = train_cfg.get('smooth_loss_weight', 0.05)
+            smooth_loss = torch.tensor(0.0, device=device)
+            if smooth_weight > 0:
                 B = y.shape[0]
                 person_total = T * p_dim
+                cam_gt = y[:, person_total:].reshape(B, T, c_dim)
+                angle_gt = cam_gt[:, :, 3:]          # az, el, roll  (T, 3)
+                angle_diff = angle_gt[:, 1:] - angle_gt[:, :-1]   # (T-1, 3)
+                smooth_loss = (angle_diff ** 2).mean()
 
-                # Get model prediction at random noise level
-                t_aux = torch.rand(B, device=device) * 0.6 + 0.2  # t in [0.2, 0.8]
-                eps = torch.randn_like(y)
-                y_t = (1.0 - t_aux.unsqueeze(-1)) * eps + t_aux.unsqueeze(-1) * y
-                t_scaled = ((1.0 - t_aux) * 999).long()
-                v_pred = flow.denoiser(y_t, t_scaled, text_embed,
-                                       shot_type=shot_type, motion_type=motion_type)
-                # Estimate y_0 from velocity: y_0 ≈ y_t + v * (1 - t)
-                y_0_est = y_t + v_pred * (1.0 - t_aux.unsqueeze(-1))
+            # === Loss 2: Camera look-at loss ===
+            # Camera forward vector should roughly point toward person position.
+            # This directly penalises the model when it generates cameras facing away.
+            lookat_weight = train_cfg.get('lookat_loss_weight', 0.02)
+            lookat_loss = torch.tensor(0.0, device=device)
+            if lookat_weight > 0:
+                B = y.shape[0]
+                person_total = T * p_dim
+                per_gt = y[:, :person_total].reshape(B, T, p_dim)           # (B, T, 3)
+                cam_gt = y[:, person_total:].reshape(B, T, c_dim)           # (B, T, 6)
+                cam_pos = cam_gt[:, :, :3]
+                az  = cam_gt[:, :, 3]
+                el  = cam_gt[:, :, 4]
+                # Camera forward direction (world space)
+                fwd_x = torch.cos(el) * torch.sin(az)
+                fwd_y = -torch.sin(el)
+                fwd_z = -torch.cos(el) * torch.cos(az)
+                fwd = torch.stack([fwd_x, fwd_y, fwd_z], dim=-1)  # (B, T, 3)
+                # Direction from camera to person
+                to_person = per_gt - cam_pos
+                dist = to_person.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                to_person_norm = to_person / dist
+                # 1 - cosine similarity (0 = perfect alignment, 2 = opposite)
+                cos_sim = (fwd * to_person_norm).sum(dim=-1)   # (B, T)
+                lookat_loss = (1.0 - cos_sim).mean()
 
-                person_part = y_0_est[:, :person_total].reshape(B, T, p_dim)
-                camera_part = y_0_est[:, person_total:].reshape(B, T, c_dim)
-
-                quarter = T // 4
-                dist_start = torch.norm(camera_part[:, :quarter, :3] - person_part[:, :quarter, :], dim=-1).mean(dim=1)
-                dist_end = torch.norm(camera_part[:, -quarter:, :3] - person_part[:, -quarter:, :], dim=-1).mean(dim=1)
-                dist_change = dist_end - dist_start
-
-                target_dir = torch.zeros(B, device=device)
-                target_dir[motion_type == 1] = -1.0   # dolly-in
-                target_dir[motion_type == 2] = 1.0    # dolly-out
-
-                has_target = (motion_type == 1) | (motion_type == 2)
-                if has_target.any():
-                    margin = 0.1
-                    direction_error = torch.clamp(margin - dist_change * target_dir, min=0.0)
-                    aux_loss = direction_error[has_target].mean()
-
-            loss = flow_loss + aux_weight * aux_loss
+            loss = flow_loss + smooth_weight * smooth_loss + lookat_weight * lookat_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -311,9 +313,9 @@ def train(config, args):
         scheduler.step()
 
         if np.isnan(avg_val_loss):
-            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}  smooth: {smooth_loss.item():.4f}  lookat: {lookat_loss.item():.4f}")
         else:
-            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}  smooth: {smooth_loss.item():.4f}  lookat: {lookat_loss.item():.4f}")
 
         if (epoch + 1) % save_interval == 0:
             ckpt_path = os.path.join(checkpoint_dir, f'fm_epoch{epoch+1}.pth')
