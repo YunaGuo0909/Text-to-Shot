@@ -57,10 +57,10 @@ training:
   augmentation: true
 
 data:
-  data_root: "/transfer/stc-data"
+  data_root: "/transfer/merged-stc-data"
   train_index_file: "train_index.json"
   test_index_file: "test_index.json"
-  norm_stats_path: "/transfer/stc-data/norm_stats.json"
+  norm_stats_path: "/transfer/merged-stc-data/norm_stats.json"
   num_workers: 4
   pin_memory: true
 
