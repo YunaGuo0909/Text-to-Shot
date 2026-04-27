@@ -119,7 +119,7 @@ def generate(args):
 
     prompts = args.text if isinstance(args.text, list) else [args.text]
 
-    output_dir = config['paths']['output_dir']
+    output_dir = args.output_dir if args.output_dir else config['paths']['output_dir']
     os.makedirs(output_dir, exist_ok=True)
 
     for prompt in prompts:
@@ -187,6 +187,8 @@ def main():
     parser.add_argument('--guidance-scale', type=float, default=3.0)
     parser.add_argument('--steps', type=int, default=None,
                         help='Euler ODE steps (overrides config, e.g. 200 for smoother paths)')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Override output directory (default: from config)')
     parser.add_argument('--no-smooth', action='store_true')
     parser.add_argument('--smooth-window', type=int, default=7)
     args = parser.parse_args()
