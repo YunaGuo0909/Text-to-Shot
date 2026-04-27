@@ -84,7 +84,7 @@ def generate(args):
     camera_dim = model_cfg['camera_dim']
     num_frames = config['trajectory']['default_num_frames']
     person_total = person_dim * num_frames
-    num_steps = config['flow_matching']['num_steps']
+    num_steps = args.steps if args.steps is not None else config['flow_matching']['num_steps']
 
     text_encoder = None
     try:
@@ -136,7 +136,9 @@ def generate(args):
         camera_traj = y_np[person_total:].reshape(num_frames, camera_dim)
 
         if not args.no_smooth:
-            person_traj = smooth_trajectory(person_traj, window=args.smooth_window)
+            # Person trajectory needs stronger smoothing to remove high-freq ODE oscillations
+            person_smooth_window = min(31, person_traj.shape[0] if person_traj.shape[0] % 2 == 1 else person_traj.shape[0] - 1)
+            person_traj = smooth_trajectory(person_traj, window=person_smooth_window)
             camera_traj = smooth_trajectory(camera_traj, window=args.smooth_window,
                                             angle_dims=[3, 4, 5], angle_window=31)
             print(f"  Smoothing applied (position window={args.smooth_window}, angle window=31)")
@@ -165,6 +167,8 @@ def main():
                         choices=list(MOTION_TYPE_MAP.keys()))
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--guidance-scale', type=float, default=3.0)
+    parser.add_argument('--steps', type=int, default=None,
+                        help='Euler ODE steps (overrides config, e.g. 200 for smoother paths)')
     parser.add_argument('--no-smooth', action='store_true')
     parser.add_argument('--smooth-window', type=int, default=7)
     args = parser.parse_args()
