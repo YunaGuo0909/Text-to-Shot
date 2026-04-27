@@ -52,7 +52,7 @@ training:
   eval_interval: 10
   cfg_dropout_prob: 0.25
   aux_loss_weight: 0.0
-  smooth_loss_weight: 0.05
+  smooth_loss_weight: 0.08
   lookat_loss_weight: 0.0
   augmentation: true
 
@@ -65,6 +65,6 @@ data:
   pin_memory: true
 
 paths:
-  checkpoint_dir: "/transfer/fm-v5-checkpoints"
-  output_dir: "/transfer/fm-v5-outputs"
-  log_dir: "/transfer/fm-v5-logs"
+  checkpoint_dir: "/transfer/fm-v6-checkpoints"
+  output_dir: "/transfer/fm-v6-outputs"
+  log_dir: "/transfer/fm-v6-logs"

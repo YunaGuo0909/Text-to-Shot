@@ -236,10 +236,18 @@ def train(config, args):
             if smooth_weight > 0:
                 B = y.shape[0]
                 person_total = T * p_dim
+                # Camera angle smoothness
                 cam_gt = y[:, person_total:].reshape(B, T, c_dim)
-                angle_gt = cam_gt[:, :, 3:]          # az, el, roll  (T, 3)
-                angle_diff = angle_gt[:, 1:] - angle_gt[:, :-1]   # (T-1, 3)
-                smooth_loss = (angle_diff ** 2).mean()
+                angle_diff = cam_gt[:, 1:, 3:] - cam_gt[:, :-1, 3:]
+                angle_smooth = (angle_diff ** 2).mean()
+                # Camera position smoothness
+                pos_diff = cam_gt[:, 1:, :3] - cam_gt[:, :-1, :3]
+                pos_smooth = (pos_diff ** 2).mean()
+                # Person position smoothness
+                per_gt = y[:, :person_total].reshape(B, T, p_dim)
+                per_diff = per_gt[:, 1:] - per_gt[:, :-1]
+                per_smooth = (per_diff ** 2).mean()
+                smooth_loss = angle_smooth + 0.5 * pos_smooth + 0.5 * per_smooth
 
             # === Loss 2: Camera look-at loss ===
             # Camera forward vector should roughly point toward person position.
