@@ -74,6 +74,19 @@ def smooth_trajectory(traj, window=7, polyorder=2, angle_dims=None, angle_window
     return smoothed
 
 
+def freeze_static_dims(traj, threshold=0.05):
+    """
+    Per-dimension: if the total range of a dimension is below threshold,
+    treat it as static and replace with its mean value (completely freeze it).
+    Eliminates residual oscillation on near-static trajectories.
+    """
+    result = traj.copy()
+    for d in range(traj.shape[1]):
+        if traj[:, d].max() - traj[:, d].min() < threshold:
+            result[:, d] = traj[:, d].mean()
+    return result
+
+
 @torch.no_grad()
 def generate(args):
     device = args.device if torch.cuda.is_available() else 'cpu'
@@ -136,12 +149,17 @@ def generate(args):
         camera_traj = y_np[person_total:].reshape(num_frames, camera_dim)
 
         if not args.no_smooth:
-            # Person trajectory needs stronger smoothing to remove high-freq ODE oscillations
+            # Person trajectory: strong smoothing + freeze near-static dims
             person_smooth_window = min(31, person_traj.shape[0] if person_traj.shape[0] % 2 == 1 else person_traj.shape[0] - 1)
             person_traj = smooth_trajectory(person_traj, window=person_smooth_window)
-            camera_traj = smooth_trajectory(camera_traj, window=args.smooth_window,
+            person_traj = freeze_static_dims(person_traj, threshold=0.05)
+
+            # Camera: position dims get window=21, angle dims get window=31
+            # then freeze near-static dims (e.g. static shot camera won't drift)
+            camera_traj = smooth_trajectory(camera_traj, window=21,
                                             angle_dims=[3, 4, 5], angle_window=31)
-            print(f"  Smoothing applied (position window={args.smooth_window}, angle window=31)")
+            camera_traj = freeze_static_dims(camera_traj, threshold=0.05)
+            print(f"  Smoothing + freeze applied (cam_pos=21, angle=31, person={person_smooth_window})")
 
         tag = f"{args.motion}_{args.shot_type}_{time.strftime('%m%d_%H%M%S')}"
         np.save(os.path.join(output_dir, f'fm_person_{tag}.npy'), person_traj)

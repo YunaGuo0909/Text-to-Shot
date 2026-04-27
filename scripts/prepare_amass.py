@@ -90,22 +90,63 @@ SHOT_DISTANCE = {
 # Action inference from person trajectory
 # ---------------------------------------------------------------------------
 
+def _direction_label(dx: float, dz: float, threshold: float = 0.15) -> str:
+    """Convert XZ displacement into a direction word."""
+    if abs(dx) < threshold and abs(dz) < threshold:
+        return None   # no clear direction
+    if abs(dx) >= abs(dz):
+        return "to the right" if dx > 0 else "to the left"
+    return "forward" if dz > 0 else "backward"
+
+
 def infer_action(person_traj: np.ndarray) -> str:
-    """Infer a short action description from the person root trajectory."""
-    displacement = person_traj[-1] - person_traj[0]
-    speed = np.linalg.norm(displacement)
-    if speed < 0.3:
+    """
+    Infer action from person trajectory with multi-phase awareness.
+
+    Strategy:
+    1. Check overall speed — if very slow → stationary.
+    2. Split into thirds and get dominant XZ direction for each third.
+    3. If all thirds agree → single-direction description.
+    4. If two distinct directions appear → two-phase description.
+    5. If three distinct directions → "moves in multiple directions".
+    """
+    T = len(person_traj)
+
+    # Overall per-frame speed in XZ plane
+    vel_xz = np.diff(person_traj[:, [0, 2]], axis=0)      # (T-1, 2)
+    frame_speeds = np.linalg.norm(vel_xz, axis=1)          # (T-1,)
+    avg_speed = frame_speeds.mean()
+
+    if avg_speed < 0.008:   # ~0.4 m/s × 1/48 s/frame
         return random.choice(["stands still", "remains in place", "stays stationary"])
-    elif displacement[0] > 0.3:
-        return "moves to the right"
-    elif displacement[0] < -0.3:
-        return "moves to the left"
-    elif displacement[2] > 0.3:
-        return "moves forward"
-    elif displacement[2] < -0.3:
-        return "moves backward"
-    else:
-        return "moves around"
+
+    # Split into three equal segments, compute dominant XZ displacement per segment
+    seg = T // 3
+    segments = [
+        person_traj[0:seg],
+        person_traj[seg:2*seg],
+        person_traj[2*seg:],
+    ]
+    dirs = []
+    for s in segments:
+        d = s[-1] - s[0]
+        label = _direction_label(d[0], d[2], threshold=0.10)
+        dirs.append(label)
+
+    # Filter out None (stationary segments)
+    active_dirs = [d for d in dirs if d is not None]
+    if not active_dirs:
+        return random.choice(["stands still", "remains in place"])
+
+    unique_dirs = list(dict.fromkeys(active_dirs))   # preserve order, deduplicate
+
+    if len(unique_dirs) == 1:
+        return f"moves {unique_dirs[0]}"
+
+    if len(unique_dirs) == 2:
+        return f"moves {unique_dirs[0]} then {unique_dirs[1]}"
+
+    return "moves in multiple directions"
 
 
 # ---------------------------------------------------------------------------
