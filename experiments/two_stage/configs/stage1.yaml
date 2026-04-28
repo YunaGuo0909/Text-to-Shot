@@ -1,5 +1,5 @@
 model:
-  person_dim: 3
+  person_dim: 4
   hidden_dim: 128
   num_layers: 4
   num_heads: 4

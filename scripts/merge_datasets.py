@@ -82,7 +82,7 @@ def main():
                         help='If > 0 and a source has no test_index.json, randomly hold out '
                              'this fraction as test data.')
     parser.add_argument('--num-frames', type=int, default=48)
-    parser.add_argument('--person-dim', type=int, default=3)
+    parser.add_argument('--person-dim', type=int, default=4)
     parser.add_argument('--camera-dim', type=int, default=6)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()

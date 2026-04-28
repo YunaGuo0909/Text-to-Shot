@@ -1,15 +1,15 @@
 """
 Preprocess E.T. dataset for joint person-camera trajectory training.
 
-Extracts BOTH camera trajectory (T, 6) and person trajectory (T, 3) per sample.
+Extracts BOTH camera trajectory (T, 6) and person trajectory (T, 4) per sample.
 
 Camera: 3x4 extrinsic matrices → (tx, ty, tz, azimuth, elevation, roll)
-Person: If character joint data exists, extract root position.
-        Otherwise, estimate look-at point from camera as person proxy.
+Person: If character joint data exists, extract root position + yaw.
+        Otherwise, estimate look-at point from camera as person proxy (yaw=0).
 
 Outputs:
   - stc-data/camera_trajectories/*.npy  (T, 6)
-  - stc-data/person_trajectories/*.npy  (T, 3)
+  - stc-data/person_trajectories/*.npy  (T, 4)
   - stc-data/train_index.json
   - stc-data/test_index.json
 
@@ -76,17 +76,23 @@ def load_camera_trajectory(traj_path: str):
     return frames
 
 
+def rotation_matrix_to_yaw(R: np.ndarray) -> float:
+    """Extract yaw angle from a 3x3 rotation matrix (Y-up convention)."""
+    return float(np.arctan2(R[0, 2], R[2, 2]))
+
+
 def load_person_joints(joints_dir: str, sample_id: str):
     """
-    Load person root position from E.T. dataset character data.
+    Load person root position + yaw from E.T. dataset character data.
 
     E.T. smplh/ files are .pkl (pickle) dicts with torch.Tensor values:
         betas, global_orient, body_pose, left_hand_pose, right_hand_pose, transl
 
-    We extract 'transl' as (T, 3) root translation in world space.
+    We extract 'transl' as (T, 3) root translation and 'global_orient' as
+    (T, 1, 3, 3) root rotation matrix to derive yaw.
 
     Also supports .npy/.npz formats as fallback.
-    Returns (T, 3) root positions or None.
+    Returns (T, 4) [px, py, pz, yaw] or (T, 3) [px, py, pz] if no orientation, or None.
     """
     import torch
 
@@ -103,10 +109,39 @@ def load_person_joints(joints_dir: str, sample_id: str):
                     # E.T. smplh tensors have requires_grad=True, must detach
                     transl = transl.detach().cpu().numpy()
                 transl = np.array(transl, dtype=np.float32)
+
+                # Extract global_orient for yaw if available
+                global_orient = None
+                if 'global_orient' in data:
+                    go = data['global_orient']
+                    if isinstance(go, torch.Tensor):
+                        go = go.detach().cpu().numpy()
+                    go = np.array(go, dtype=np.float32)
+                    global_orient = go
+
                 if transl.ndim == 2 and transl.shape[1] >= 3:
-                    return transl[:, :3]
+                    positions = transl[:, :3]
                 elif transl.ndim == 1 and transl.shape[0] >= 3:
-                    return transl[:3].reshape(1, 3)
+                    positions = transl[:3].reshape(1, 3)
+                else:
+                    positions = None
+
+                if positions is not None and global_orient is not None:
+                    T_frames = positions.shape[0]
+                    yaws = np.zeros(T_frames, dtype=np.float32)
+                    try:
+                        # global_orient is (T, 1, 3, 3) or (T, 3, 3)
+                        if global_orient.ndim == 4:
+                            global_orient = global_orient[:, 0, :, :]  # (T, 3, 3)
+                        if global_orient.ndim == 3 and global_orient.shape[1:] == (3, 3):
+                            for t in range(min(T_frames, global_orient.shape[0])):
+                                yaws[t] = rotation_matrix_to_yaw(global_orient[t])
+                    except Exception:
+                        pass  # yaws stays zeros
+                    result = np.concatenate([positions, yaws[:T_frames].reshape(-1, 1)], axis=1)
+                    return result  # (T, 4)
+                elif positions is not None:
+                    return positions  # (T, 3) fallback
         except Exception as e:
             print(f"[smplh load failed for {sample_id}] {type(e).__name__}: {e}")
 
@@ -278,7 +313,7 @@ def main():
             stats['skipped'] += 1
             continue
 
-        # Person trajectory (T, 3)
+        # Person trajectory (T, 4) = [px, py, pz, yaw]
         person_traj = None
         if joints_dir:
             person_traj = load_person_joints(joints_dir, sample_id)
@@ -290,17 +325,26 @@ def main():
 
         if person_traj is not None:
             person_traj = resample_trajectory(person_traj, args.num_frames)
+            # Pad to (T, 4) if only (T, 3) was returned (no orientation)
+            if person_traj.shape[1] == 3:
+                person_traj = np.concatenate(
+                    [person_traj, np.zeros((person_traj.shape[0], 1), dtype=np.float32)],
+                    axis=1)
             stats['has_joints'] += 1
             has_real_person = True
         else:
             if args.require_person:
                 stats['skipped'] += 1
                 continue
-            # Estimate from camera look-at
+            # Estimate from camera look-at (yaw=0 proxy)
             person_positions = np.stack(
                 [extrinsic_to_lookat(R, t, args.lookat_distance) for R, t in frames],
                 axis=0)
-            person_traj = resample_trajectory(person_positions, args.num_frames)
+            person_positions = resample_trajectory(person_positions, args.num_frames)
+            # Pad with zeros for yaw → (T, 4)
+            person_traj = np.concatenate(
+                [person_positions, np.zeros((person_positions.shape[0], 1), dtype=np.float32)],
+                axis=1)
             stats['lookat_proxy'] += 1
             has_real_person = False
 

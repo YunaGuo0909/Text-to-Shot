@@ -7,8 +7,8 @@
 model:
   # Camera state: (tx, ty, tz, azimuth, elevation, roll)
   camera_dim: 6
-  # Person root trajectory: (px, py, pz)
-  person_dim: 3
+  # Person root trajectory: (px, py, pz, yaw)
+  person_dim: 4
   # Hidden dimension for dual-branch Transformer
   hidden_dim: 256
   # Number of dual-branch Transformer layers

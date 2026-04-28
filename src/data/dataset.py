@@ -2,13 +2,15 @@
 Dataset for joint person-camera trajectory diffusion training.
 
 Each sample contains:
-- Person root trajectory: (T, 3) world positions
+- Person root trajectory: (T, 4) world positions + yaw [px, py, pz, yaw]
 - Camera trajectory: (T, 6) camera state (tx, ty, tz, azimuth, elevation, roll)
 - Text description
 - Shot type label
 - Camera motion type label
 
-Joint representation: y = [person_flat (T*3), camera_flat (T*6)]
+Joint representation: y = [person_flat (T*4), camera_flat (T*6)]
+
+Backward compatible: old (T, 3) person files are zero-padded to (T, 4).
 """
 
 import torch
@@ -124,7 +126,12 @@ class JointTrajectoryDataset(Dataset):
         }
 
     def _load_trajectory(self, sample, key, fallback_key, dim):
-        """Load a trajectory array from the sample entry."""
+        """Load a trajectory array from the sample entry.
+
+        Handles backward compatibility: if loaded array has fewer columns
+        than expected dim (e.g., old (T,3) files when person_dim=4),
+        pads with zeros for missing columns.
+        """
         path_key = key
         if path_key not in sample and fallback_key and fallback_key in sample:
             path_key = fallback_key
@@ -134,7 +141,20 @@ class JointTrajectoryDataset(Dataset):
             if os.path.exists(traj_path):
                 traj = np.load(traj_path).astype(np.float32)
                 if traj.ndim == 1:
-                    traj = traj.reshape(-1, dim)
+                    # Try to reshape; if loaded dim < expected, pad first
+                    loaded_total = traj.shape[0]
+                    loaded_dim = loaded_total // (loaded_total // dim) if dim > 0 else dim
+                    # Best guess: reshape with the smaller dim, then pad
+                    for try_dim in [dim, dim - 1, 3]:
+                        if try_dim > 0 and loaded_total % try_dim == 0:
+                            traj = traj.reshape(-1, try_dim)
+                            break
+                # Pad columns if loaded has fewer dims than expected
+                if traj.ndim == 2 and traj.shape[1] < dim:
+                    pad_width = dim - traj.shape[1]
+                    traj = np.concatenate(
+                        [traj, np.zeros((traj.shape[0], pad_width), dtype=np.float32)],
+                        axis=1)
                 return traj
 
         # Fallback: zeros

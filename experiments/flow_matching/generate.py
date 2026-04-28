@@ -87,6 +87,123 @@ def freeze_static_dims(traj, threshold=0.05):
     return result
 
 
+def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
+    """
+    Make person trajectory physically plausible:
+    - If overall displacement is small, freeze to stationary.
+    - Otherwise, detect segments of roughly linear motion and straighten each.
+    - Connect segments with smooth cubic interpolation for turns.
+    - If yaw (dim 3) is present, smooth it separately with angular wraparound.
+
+    Args:
+        traj: (T, 3) or (T, 4) person root positions [+ yaw]
+        static_threshold: if total displacement < this, person is stationary
+        segment_cost: penalty for adding a new segment (higher = fewer segments)
+
+    Returns:
+        (T, D) regularized trajectory (same shape as input)
+    """
+    T = traj.shape[0]
+    D = traj.shape[1]
+    pos_dims = min(D, 3)  # position dims are 0-2
+
+    # Separate yaw if present
+    has_yaw = D >= 4
+    yaw = traj[:, 3].copy() if has_yaw else None
+    pos = traj[:, :pos_dims]
+
+    # 1. If person barely moves, freeze completely
+    total_disp = np.linalg.norm(pos[-1] - pos[0])
+    max_range = np.max(np.ptp(pos, axis=0))
+    if total_disp < static_threshold and max_range < static_threshold:
+        result = np.tile(pos.mean(axis=0), (T, 1))
+        if has_yaw:
+            # Smooth yaw with angular averaging for static person
+            smoothed_yaw = _smooth_angular(yaw, window=31)
+            result = np.concatenate([result, smoothed_yaw.reshape(-1, 1)], axis=1)
+        return result
+
+    # 2. Find optimal breakpoints using simple greedy segmentation
+    #    Each segment is approximated by a straight line (start -> end).
+    #    Add a breakpoint when the max deviation from the line exceeds a threshold.
+    breakpoints = [0]
+    i = 0
+    while i < T - 1:
+        best_end = T - 1
+        for j in range(i + 1, T):
+            if j == i:
+                continue
+            frac = np.linspace(0, 1, j - i + 1).reshape(-1, 1)
+            line = pos[i] + frac * (pos[j] - pos[i])
+            actual = pos[i:j+1]
+            max_dev = np.max(np.linalg.norm(actual - line, axis=1))
+            if max_dev > segment_cost:
+                best_end = max(j - 1, i + 1)
+                break
+        breakpoints.append(best_end)
+        i = best_end
+    if breakpoints[-1] != T - 1:
+        breakpoints.append(T - 1)
+    breakpoints = sorted(set(breakpoints))
+
+    # 3. Build keyframe positions at breakpoints
+    keyframe_times = np.array(breakpoints)
+    keyframe_positions = pos[keyframe_times].copy()
+
+    # 4. Per-dimension: freeze dimensions that don't change much within each segment
+    for seg_idx in range(len(breakpoints) - 1):
+        s, e = breakpoints[seg_idx], breakpoints[seg_idx + 1]
+        seg = pos[s:e+1]
+        for d in range(pos_dims):
+            if np.ptp(seg[:, d]) < static_threshold:
+                keyframe_positions[seg_idx, d] = seg[:, d].mean()
+                keyframe_positions[seg_idx + 1, d] = seg[:, d].mean()
+
+    # 5. Interpolate between keyframes with cubic spline for smooth transitions
+    from scipy.interpolate import CubicSpline
+    result_pos = np.zeros((T, pos_dims), dtype=traj.dtype)
+    t_all = np.arange(T, dtype=np.float64)
+
+    if len(keyframe_times) >= 3:
+        for d in range(pos_dims):
+            cs = CubicSpline(keyframe_times.astype(np.float64),
+                             keyframe_positions[:, d],
+                             bc_type='clamped')
+            result_pos[:, d] = cs(t_all)
+    elif len(keyframe_times) == 2:
+        for d in range(pos_dims):
+            result_pos[:, d] = np.linspace(keyframe_positions[0, d],
+                                            keyframe_positions[1, d], T)
+    else:
+        result_pos = pos.copy()
+
+    # 6. Handle yaw smoothing with angular wraparound
+    if has_yaw:
+        smoothed_yaw = _smooth_angular(yaw, window=15)
+        result = np.concatenate([result_pos, smoothed_yaw.reshape(-1, 1)], axis=1)
+    else:
+        result = result_pos
+
+    return result
+
+
+def _smooth_angular(angles, window=15):
+    """
+    Smooth an angular signal handling wraparound at +/-pi.
+
+    Uses unwrap -> Savitzky-Golay filter -> re-wrap approach.
+    """
+    unwrapped = np.unwrap(angles)
+    w = min(window, len(unwrapped) if len(unwrapped) % 2 == 1 else len(unwrapped) - 1)
+    w = max(w, 3)
+    if w % 2 == 0:
+        w -= 1
+    smoothed = savgol_filter(unwrapped, window_length=w, polyorder=2)
+    # Re-wrap to [-pi, pi]
+    smoothed = (smoothed + np.pi) % (2 * np.pi) - np.pi
+    return smoothed.astype(np.float32)
+
+
 @torch.no_grad()
 def generate(args):
     device = args.device if torch.cuda.is_available() else 'cpu'
@@ -149,9 +266,12 @@ def generate(args):
         camera_traj = y_np[person_total:].reshape(num_frames, camera_dim)
 
         if not args.no_smooth:
-            # Person trajectory: strong smoothing + freeze near-static dims
+            # Person trajectory: smooth → regularize to piecewise-linear → freeze static
             person_smooth_window = min(31, person_traj.shape[0] if person_traj.shape[0] % 2 == 1 else person_traj.shape[0] - 1)
             person_traj = smooth_trajectory(person_traj, window=person_smooth_window)
+            person_traj = regularize_person_trajectory(person_traj,
+                                                        static_threshold=0.08,
+                                                        segment_cost=0.3)
             person_traj = freeze_static_dims(person_traj, threshold=0.05)
 
             # Camera: position dims get window=21, angle dims get window=31
@@ -159,7 +279,7 @@ def generate(args):
             camera_traj = smooth_trajectory(camera_traj, window=21,
                                             angle_dims=[3, 4, 5], angle_window=31)
             camera_traj = freeze_static_dims(camera_traj, threshold=0.05)
-            print(f"  Smoothing + freeze applied (cam_pos=21, angle=31, person={person_smooth_window})")
+            print(f"  Smoothing + regularize + freeze applied")
 
         tag = f"{args.motion}_{args.shot_type}_{time.strftime('%m%d_%H%M%S')}"
         np.save(os.path.join(output_dir, f'fm_person_{tag}.npy'), person_traj)

@@ -10,7 +10,7 @@ produce balanced augmentation data.
 
 Outputs (same format as E.T. preprocessed data):
   - <output-root>/camera_trajectories/*.npy  (48, 6)
-  - <output-root>/person_trajectories/*.npy  (48, 3)
+  - <output-root>/person_trajectories/*.npy  (48, 4)  [px, py, pz, yaw]
   - <output-root>/train_index.json
 
 Usage:
@@ -19,6 +19,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json
 import argparse
@@ -87,6 +88,39 @@ SHOT_DISTANCE = {
 
 
 # ---------------------------------------------------------------------------
+# Rotation utilities
+# ---------------------------------------------------------------------------
+
+def axis_angle_to_rotation_matrix(aa: np.ndarray) -> np.ndarray:
+    """Convert (3,) axis-angle to (3,3) rotation matrix via Rodrigues formula."""
+    angle = np.linalg.norm(aa)
+    if angle < 1e-8:
+        return np.eye(3)
+    axis = aa / angle
+    K = np.array([[0, -axis[2], axis[1]],
+                  [axis[2], 0, -axis[0]],
+                  [-axis[1], axis[0], 0]])
+    return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+
+
+def rotation_matrix_to_yaw(R: np.ndarray) -> float:
+    """Extract yaw angle from a 3x3 rotation matrix (Y-up convention)."""
+    return float(np.arctan2(R[0, 2], R[2, 2]))
+
+
+def extract_yaw_from_axis_angle(aa_sequence: np.ndarray) -> np.ndarray:
+    """
+    Convert (T, 3) axis-angle root orientations to (T,) yaw angles.
+    """
+    T = aa_sequence.shape[0]
+    yaws = np.zeros(T, dtype=np.float32)
+    for t in range(T):
+        R = axis_angle_to_rotation_matrix(aa_sequence[t])
+        yaws[t] = rotation_matrix_to_yaw(R)
+    return yaws
+
+
+# ---------------------------------------------------------------------------
 # Action inference from person trajectory
 # ---------------------------------------------------------------------------
 
@@ -103,12 +137,16 @@ def infer_action(person_traj: np.ndarray) -> str:
     """
     Infer action from person trajectory with multi-phase awareness.
 
+    Accepts (T, 3) or (T, 4) trajectories. If dim 4 is present, uses yaw
+    to detect turning and enriches the description.
+
     Strategy:
     1. Check overall speed — if very slow → stationary.
     2. Split into thirds and get dominant XZ direction for each third.
     3. If all thirds agree → single-direction description.
     4. If two distinct directions appear → two-phase description.
     5. If three distinct directions → "moves in multiple directions".
+    6. If yaw changes significantly (>45 deg), append turning info.
     """
     T = len(person_traj)
 
@@ -118,35 +156,49 @@ def infer_action(person_traj: np.ndarray) -> str:
     avg_speed = frame_speeds.mean()
 
     if avg_speed < 0.008:   # ~0.4 m/s × 1/48 s/frame
-        return random.choice(["stands still", "remains in place", "stays stationary"])
+        base = random.choice(["stands still", "remains in place", "stays stationary"])
+    else:
+        # Split into three equal segments, compute dominant XZ displacement per segment
+        seg = T // 3
+        segments = [
+            person_traj[0:seg],
+            person_traj[seg:2*seg],
+            person_traj[2*seg:],
+        ]
+        dirs = []
+        for s in segments:
+            d = s[-1] - s[0]
+            label = _direction_label(d[0], d[2], threshold=0.10)
+            dirs.append(label)
 
-    # Split into three equal segments, compute dominant XZ displacement per segment
-    seg = T // 3
-    segments = [
-        person_traj[0:seg],
-        person_traj[seg:2*seg],
-        person_traj[2*seg:],
-    ]
-    dirs = []
-    for s in segments:
-        d = s[-1] - s[0]
-        label = _direction_label(d[0], d[2], threshold=0.10)
-        dirs.append(label)
+        # Filter out None (stationary segments)
+        active_dirs = [d for d in dirs if d is not None]
+        if not active_dirs:
+            base = random.choice(["stands still", "remains in place"])
+        else:
+            unique_dirs = list(dict.fromkeys(active_dirs))   # preserve order, deduplicate
+            if len(unique_dirs) == 1:
+                base = f"moves {unique_dirs[0]}"
+            elif len(unique_dirs) == 2:
+                base = f"moves {unique_dirs[0]} then {unique_dirs[1]}"
+            else:
+                base = "moves in multiple directions"
 
-    # Filter out None (stationary segments)
-    active_dirs = [d for d in dirs if d is not None]
-    if not active_dirs:
-        return random.choice(["stands still", "remains in place"])
+    # Enrich with yaw information if available (dim 4)
+    if person_traj.shape[1] >= 4:
+        yaw = person_traj[:, 3]
+        # Total yaw change (handle wraparound)
+        yaw_diff = np.diff(yaw)
+        # Wrap to [-pi, pi]
+        yaw_diff = (yaw_diff + np.pi) % (2 * np.pi) - np.pi
+        total_yaw_change = np.sum(yaw_diff)
+        if abs(total_yaw_change) > np.radians(45):
+            if total_yaw_change > 0:
+                base += " while turning left"
+            else:
+                base += " while turning right"
 
-    unique_dirs = list(dict.fromkeys(active_dirs))   # preserve order, deduplicate
-
-    if len(unique_dirs) == 1:
-        return f"moves {unique_dirs[0]}"
-
-    if len(unique_dirs) == 2:
-        return f"moves {unique_dirs[0]} then {unique_dirs[1]}"
-
-    return "moves in multiple directions"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +222,7 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
     Generate a synthetic camera trajectory for a person trajectory.
 
     Args:
-        person_traj: (T, 3) person root positions.
+        person_traj: (T, 3) or (T, 4) person root positions (only xyz used).
         motion_type: one of ALL_MOTION_TYPES.
         num_frames: number of frames (should match person_traj.shape[0]).
 
@@ -179,7 +231,14 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
         shot_type: inferred shot type string.
     """
     T = num_frames
-    assert person_traj.shape == (T, 3), f"Expected ({T}, 3), got {person_traj.shape}"
+    # Use only position dims (first 3) for camera generation
+    if person_traj.shape[1] > 3:
+        person_pos = person_traj[:, :3]
+    else:
+        person_pos = person_traj
+    assert person_pos.shape == (T, 3), f"Expected ({T}, 3), got {person_pos.shape}"
+    # Use person_pos (xyz only) throughout this function
+    person_traj = person_pos
 
     centroid = person_traj.mean(axis=0)
     noise_sigma = 0.01
@@ -354,7 +413,7 @@ def find_npz_files(root_dir: str) -> list:
 
 
 def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
-                   chunk_frames: int = 48) -> list:
+                   chunk_frames: int = 48, root_orient: np.ndarray = None) -> list:
     """
     Extract fixed-length trajectory chunks from a long motion sequence.
 
@@ -366,9 +425,10 @@ def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
         source_fps: frames per second of the source data.
         target_fps: target fps (24 for our model).
         chunk_frames: number of frames per chunk (48).
+        root_orient: (T_source, 3) axis-angle root orientation, or None.
 
     Returns:
-        List of (chunk_frames, 3) numpy arrays.
+        List of (chunk_frames, 4) numpy arrays [px, py, pz, yaw].
     """
     T_src = trans.shape[0]
     duration_sec = T_src / source_fps
@@ -377,8 +437,18 @@ def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
     if T_target < chunk_frames:
         return []
 
-    # Resample to target_fps
-    resampled = resample_trajectory(trans, T_target)
+    # Extract yaw from root orientation if available
+    if root_orient is not None and root_orient.shape[0] == T_src:
+        yaws = extract_yaw_from_axis_angle(root_orient)  # (T_src,)
+        # Combine trans + yaw → (T_src, 4)
+        combined = np.concatenate([trans, yaws.reshape(-1, 1)], axis=1)
+    else:
+        # No orientation: pad with zeros for yaw
+        combined = np.concatenate(
+            [trans, np.zeros((T_src, 1), dtype=np.float32)], axis=1)
+
+    # Resample to target_fps (all 4 dims)
+    resampled = resample_trajectory(combined, T_target)
 
     # Split into non-overlapping chunks
     chunks = []
@@ -499,10 +569,20 @@ def main():
                         help='Random seed for reproducibility.')
     parser.add_argument('--download-subset', type=str, default='CMU',
                         help='AMASS subset to auto-download if amass-root is missing.')
+    parser.add_argument('--humanml3d-texts', type=str, default=None,
+                        help='Path to humanml3d_captions.json (from download_humanml3d_texts.py). '
+                             'If provided, uses real captions instead of synthetic templates.')
     args = parser.parse_args()
 
     random.seed(args.seed)
     np.random.seed(args.seed)
+
+    # Load HumanML3D captions if provided
+    humanml3d_captions = {}
+    if args.humanml3d_texts and os.path.exists(args.humanml3d_texts):
+        with open(args.humanml3d_texts, 'r', encoding='utf-8') as f:
+            humanml3d_captions = json.load(f)
+        print(f"Loaded HumanML3D captions: {len(humanml3d_captions)} AMASS sequences")
 
     amass_root = args.amass_root
 
@@ -568,6 +648,17 @@ def main():
             continue
         trans = trans[:, :3]
 
+        # Extract root orientation (axis-angle) if available
+        root_orient = None
+        if 'root_orient' in data:
+            ro = np.array(data['root_orient'], dtype=np.float32)
+            if ro.ndim == 2 and ro.shape[1] >= 3 and ro.shape[0] == trans.shape[0]:
+                root_orient = ro[:, :3]
+        elif 'poses' in data:
+            poses = np.array(data['poses'], dtype=np.float32)
+            if poses.ndim == 2 and poses.shape[1] >= 3 and poses.shape[0] == trans.shape[0]:
+                root_orient = poses[:, :3]
+
         # Determine source FPS
         source_fps = args.default_source_fps
         if 'mocap_framerate' in data:
@@ -579,8 +670,9 @@ def main():
             if fps_val > 0:
                 source_fps = fps_val
 
-        # Extract chunks
-        chunks = extract_chunks(trans, source_fps, args.target_fps, args.num_frames)
+        # Extract chunks (now returns (chunk_frames, 4) with yaw)
+        chunks = extract_chunks(trans, source_fps, args.target_fps, args.num_frames,
+                                root_orient=root_orient)
         if not chunks:
             stats['files_skipped'] += 1
             continue
@@ -596,6 +688,21 @@ def main():
         # Derive a base name from the file path
         rel_path = os.path.relpath(npz_path, amass_root)
         base_name = rel_path.replace(os.sep, '_').replace('/', '_').replace('.npz', '')
+
+        # Check for HumanML3D captions for this AMASS sequence
+        # Try matching against the relative path (without extension)
+        amass_key = rel_path.replace(os.sep, '/').replace('.npz', '')
+        # Also try without _stageii or _poses suffix
+        amass_key_variants = [
+            amass_key,
+            re.sub(r'_stageii$', '', amass_key),
+            re.sub(r'_poses$', '', amass_key),
+        ]
+        real_captions = []
+        for variant in amass_key_variants:
+            if variant in humanml3d_captions:
+                real_captions = humanml3d_captions[variant]
+                break
 
         for chunk_idx, person_chunk in enumerate(chunks):
             action = infer_action(person_chunk)
@@ -618,9 +725,15 @@ def main():
                 np.save(cam_path, camera_traj)
                 np.save(person_path, person_chunk)
 
-                # Generate caption
-                template = random.choice(CAPTION_TEMPLATES[motion_type])
-                caption = template.format(action=action)
+                # Generate caption: prefer real HumanML3D captions, fall back to templates
+                if real_captions:
+                    # Use a real caption + camera motion description
+                    person_caption = random.choice(real_captions)
+                    cam_desc = f"The camera {motion_type.replace('-', ' ')}s."
+                    caption = f"{person_caption} {cam_desc}"
+                else:
+                    template = random.choice(CAPTION_TEMPLATES[motion_type])
+                    caption = template.format(action=action)
 
                 entry = {
                     'id': sample_id,

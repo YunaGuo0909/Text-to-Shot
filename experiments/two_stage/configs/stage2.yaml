@@ -1,6 +1,6 @@
 model:
   camera_dim: 6
-  person_dim: 3
+  person_dim: 4
   hidden_dim: 256
   num_layers: 6
   num_heads: 4
