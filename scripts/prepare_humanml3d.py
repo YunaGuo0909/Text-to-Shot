@@ -287,11 +287,11 @@ def main():
             np.save(os.path.join(cam_out, f'{sample_id}.npy'), camera_traj)
             np.save(os.path.join(per_out, f'{sample_id}.npy'), person_traj)
 
-            # Use human-written caption + camera motion description
+            # Use human-written caption + camera motion description + shot type prefix
             person_caption = random.choice(captions)
             cam_template = random.choice(CAPTION_TEMPLATES[motion_type])
-            # Replace {action} placeholder with the human caption
-            cam_text = cam_template.format(action=person_caption.rstrip('.').lower())
+            shot_prefix = f"{shot_type.replace('-', ' ').title()}. " if shot_type != 'medium-shot' else ""
+            cam_text = f"{shot_prefix}{cam_template.format(action=person_caption.rstrip('.').lower())}"
 
             train_index.append({
                 'id': sample_id,

@@ -726,14 +726,14 @@ def main():
                 np.save(person_path, person_chunk)
 
                 # Generate caption: prefer real HumanML3D captions, fall back to templates
+                shot_prefix = f"{shot_type.replace('-', ' ').title()}. " if shot_type != 'medium-shot' else ""
                 if real_captions:
-                    # Use a real caption + camera motion description
                     person_caption = random.choice(real_captions)
                     cam_desc = f"The camera {motion_type.replace('-', ' ')}s."
-                    caption = f"{person_caption} {cam_desc}"
+                    caption = f"{shot_prefix}{person_caption} {cam_desc}"
                 else:
                     template = random.choice(CAPTION_TEMPLATES[motion_type])
-                    caption = template.format(action=action)
+                    caption = f"{shot_prefix}{template.format(action=action)}"
 
                 entry = {
                     'id': sample_id,

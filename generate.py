@@ -207,16 +207,16 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
                 edgecolors='white', linewidths=1.5, zorder=5, label='Cam start')
     ax1.scatter(*camera_traj[-1, :3], color='#FF6B6B', s=80, marker='s',
                 edgecolors='white', linewidths=1.5, zorder=5, label='Cam end')
-    ax1.scatter(*person_traj[0], color='#4ECDC4', s=80, marker='^',
+    ax1.scatter(*person_traj[0, :3], color='#4ECDC4', s=80, marker='^',
                 edgecolors='white', linewidths=1.5, zorder=5)
-    ax1.scatter(*person_traj[-1], color='#95E66D', s=80, marker='v',
+    ax1.scatter(*person_traj[-1, :3], color='#95E66D', s=80, marker='v',
                 edgecolors='white', linewidths=1.5, zorder=5)
 
     # Camera orientation arrows in 3D (every few frames, orange)
     arrow_interval = max(1, num_frames // 6)
     arrow_len_factor = 0.25 * max(
         np.ptp(camera_traj[:, :3], axis=0).max(),
-        np.ptp(person_traj, axis=0).max(),
+        np.ptp(person_traj[:, :3], axis=0).max(),
         0.5
     )
     for i in range(0, num_frames, arrow_interval):
