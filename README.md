@@ -1,247 +1,307 @@
-# Script-to-Camera
+# Text-to-Shot (Script-to-Camera)
 
-**Joint Person-Camera Trajectory Generation from Text via Dual-Branch Diffusion**
+Joint person-camera trajectory generation from text.
 
----
+This repository contains three active pipelines:
 
-## Overview
+1. **Baseline joint DDPM** (`train.py`, `generate.py`, `evaluate.py`)
+2. **Flow Matching experiment** (`experiments/flow_matching`)
+3. **Two-stage experiment** (`experiments/two_stage`)
 
-Given a text scene description, this system **simultaneously generates** a person's 3D motion trajectory and a cinematic camera trajectory — using a dual-branch diffusion model with cross-attention.
-
-```
-Text Description ──▶ CLIP Encoder ──▶ Dual-Branch Diffusion ──▶ Person Trajectory (T, 3)
-                                       ├─ Person Branch ◄──►─┤     +
-                                       └─ Camera Branch ◄──►─┘   Camera Trajectory (T, 6)
-```
-
-**Key distinction from prior work:** E.T./DIRECTOR (Wang et al., 2024) generates camera trajectories *conditioned on pre-given character motion* — the person's movement must already exist as input. Our system requires **no pre-existing character data**: both person and camera trajectories are generated from text alone. This enables fully automated scene generation without an upstream motion capture or motion synthesis step.
-
-Training data: [E.T. (Exceptional Trajectories)](https://github.com/robincourant/DIRECTOR) dataset — real film camera trajectories + SMPL-H character data.
+The project is data-centric and includes scripts to prepare E.T., AMASS, HumanML3D, and DanceCamera3D into one unified training format.
 
 ---
 
-## Project Structure
+## Current trajectory format
 
-```
+- **Person trajectory**: `(T, 5)` = `[px, py, pz, sin_yaw, cos_yaw]`
+- **Camera trajectory**: `(T, 6)` = `[tx, ty, tz, azimuth, elevation, roll]`
+- **Joint vector**: `[person_flat, camera_flat]` with `T=48` by default
+
+> Note: old `(T, 3)` person files are still supported and padded to `(T, 5)` in `src/data/dataset.py`.
+
+---
+
+## Repository layout
+
+```text
 Text-to-Shot/
 ├── configs/
-│   └── default.yaml                 # Model, training & path configuration
+│   └── default.yaml
 ├── src/
-│   ├── models/
-│   │   ├── denoiser.py              # JointTrajectoryDenoiser (dual-branch Transformer + cross-attention)
-│   │   ├── diffusion.py             # Gaussian diffusion (DDPM)
-│   │   ├── text_encoder.py          # Frozen CLIP text encoder
-│   │   └── film.py                  # FiLM conditioning layer
 │   ├── data/
-│   │   └── dataset.py               # JointTrajectoryDataset (person + camera paired)
+│   │   └── dataset.py
+│   ├── models/
+│   │   ├── denoiser.py
+│   │   ├── diffusion.py
+│   │   ├── text_encoder.py
+│   │   └── film.py
 │   └── utils/
-│       ├── toric.py                 # Toric camera parameterization
-│       └── smpl_utils.py            # Rotation & trajectory utilities
 ├── scripts/
-│   ├── download_et_data.py          # Download E.T. dataset (with existence check)
-│   ├── preprocess_et_data.py        # E.T. → joint training data (person + camera .npy)
-│   ├── filter_et_single_person.py   # Filter to single-person subset
-│   └── verify_data.py               # Data & model sanity check
-├── train.py                         # Training loop
-├── evaluate.py                      # Quantitative evaluation
-├── generate.py                      # Inference: text → joint trajectory + visualization
-└── pyproject.toml
+│   ├── download_et_data.py
+│   ├── preprocess_et_data.py
+│   ├── filter_et_single_person.py
+│   ├── compute_norm_stats.py
+│   ├── prepare_amass.py
+│   ├── prepare_humanml3d.py
+│   ├── prepare_dancecamera3d.py
+│   └── merge_datasets.py
+├── experiments/
+│   ├── flow_matching/
+│   └── two_stage/
+├── train.py
+├── generate.py
+├── evaluate.py
+├── Text-to-Shot_Pipeline.ipynb
+└── report_v2.md
 ```
 
 ---
 
-## Architecture
+## Installation
 
-### Dual-Branch Transformer Denoiser
+Requirements:
 
-The core model (`JointTrajectoryDenoiser`) processes person and camera trajectories through parallel Transformer branches with cross-attention:
+- Python >= 3.10
+- CUDA GPU recommended for training
 
-```
-Input: y_t = [person_flat (T×3), camera_flat (T×6)]   (noisy joint trajectory)
-
-  ┌─────────────────────────────────────────────────┐
-  │              Conditioning                        │
-  │  CLIP text (512) + timestep (128)               │
-  │  + shot_type (64) + motion_type (64)            │
-  └──────────────────┬──────────────────────────────┘
-                     │
-  ┌──────────────────▼──────────────────────────────┐
-  │          × N Dual-Branch Blocks                  │
-  │                                                  │
-  │  Person Branch          Camera Branch            │
-  │  ┌──────────┐          ┌──────────┐             │
-  │  │Self-Attn │          │Self-Attn │             │
-  │  └────┬─────┘          └────┬─────┘             │
-  │       │    Cross-Attention  │                    │
-  │       │◄───────────────────►│                    │
-  │  ┌────▼─────┐          ┌────▼─────┐             │
-  │  │FiLM + FF │          │FiLM + FF │             │
-  │  └──────────┘          └──────────┘             │
-  └──────────────────────────────────────────────────┘
-
-Output: y_0 = [person_pred (T×3), camera_pred (T×6)]  (denoised joint trajectory)
-```
-
-### Data Representation
-
-| Component | Dimension | Description |
-|-----------|-----------|-------------|
-| Person trajectory | (T, 3) | Root position (px, py, pz) from SMPL-H `transl` |
-| Camera trajectory | (T, 6) | (tx, ty, tz, azimuth, elevation, roll) |
-| Joint vector | T×3 + T×6 = 432 | Concatenated, flattened for diffusion |
-
----
-
-## Setup
-
-### Prerequisites
-
-- Python ≥ 3.10
-- CUDA GPU (for training)
-
-### Installation
+Install:
 
 ```bash
-git clone <repo-url>
-cd Text-to-Shot
 pip install -e .
 ```
 
 ---
 
-## Data Preparation
+## Quick start (baseline E.T. pipeline)
 
-All data lives under `/transfer/` on the training machine.
+All default configs/scripts assume data under `/transfer`.
 
-### 1. Download E.T. Dataset
+### 1) Download E.T.
 
 ```bash
 python scripts/download_et_data.py
 ```
 
-Downloads to `/transfer/et-data`. **Skips automatically if data already exists** (checks for `traj/` and `caption/` directories).
+Default target: `/transfer/et-data` (skips download if core folders already exist).
 
-### 2. Preprocess
-
-Extracts paired person + camera trajectories:
+### 2) Preprocess E.T. into training format
 
 ```bash
-python scripts/preprocess_et_data.py --et-root /transfer/et-data --output-root /transfer/stc-data
+python scripts/preprocess_et_data.py \
+  --et-root /transfer/et-data \
+  --output-root /transfer/stc-data \
+  --num-frames 48
 ```
-
-- Camera: 3×4 extrinsics → 6D state (tx, ty, tz, azimuth, elevation, roll)
-- Person: SMPL-H `.pkl` → root translation `transl` (T, 3)
-- All trajectories resampled to 48 frames (2s @ 24fps)
 
 Output:
-```
-/transfer/stc-data/
-├── camera_trajectories/*.npy   (T, 6) per sample
-├── person_trajectories/*.npy   (T, 3) per sample
-├── train_index.json
-└── test_index.json
-```
 
-### 3. Filter Single-Person Subset
+- `/transfer/stc-data/camera_trajectories/*.npy`
+- `/transfer/stc-data/person_trajectories/*.npy`
+- `/transfer/stc-data/train_index.json`
+- `/transfer/stc-data/test_index.json`
+
+### 3) (Optional) filter to single-person subset
 
 ```bash
 python scripts/filter_et_single_person.py --data-root /transfer/stc-data
 ```
 
-Outputs `train_index_single_person.json` and `test_index_single_person.json`.
+Creates:
 
-### 4. Verify
+- `train_index_single_person.json`
+- `test_index_single_person.json`
+
+### 4) Compute normalization stats (recommended)
 
 ```bash
-python scripts/verify_data.py
+python scripts/compute_norm_stats.py \
+  --data-root /transfer/stc-data \
+  --index-file train_index.json
+```
+
+Writes `/transfer/stc-data/norm_stats.json`.
+
+---
+
+## Optional data augmentation pipeline
+
+### Prepare AMASS synthetic camera pairs
+
+```bash
+python scripts/prepare_amass.py \
+  --amass-root /transfer/amass \
+  --output-root /transfer/amass-stc-data
+```
+
+### Prepare HumanML3D-derived pairs
+
+```bash
+python scripts/prepare_humanml3d.py \
+  --amass-root /transfer/amassdata \
+  --humanml3d-root /transfer/HumanML3D \
+  --output-root /transfer/humanml3d-stc-data-v7
+```
+
+### Prepare DanceCamera3D pairs
+
+```bash
+python scripts/prepare_dancecamera3d.py \
+  --data-root /transfer/dancecamera3d \
+  --output-root /transfer/dance-stc-data
+```
+
+### Merge multiple prepared datasets
+
+```bash
+python scripts/merge_datasets.py \
+  --sources /transfer/stc-data /transfer/amass-stc-data /transfer/dance-stc-data \
+  --output-root /transfer/merged-stc-data \
+  --compute-norm-stats
 ```
 
 ---
 
 ## Training
 
+### 1) Baseline joint DDPM
+
 ```bash
-# Single-person subset with CLIP conditioning
+# Full set
+python train.py --config configs/default.yaml --device cuda
+
+# Single-person subset
 python train.py --config configs/default.yaml --device cuda --single-person
 
-# Without CLIP (quick test)
-python train.py --config configs/default.yaml --device cpu --no-clip
-
 # Resume
-python train.py --config configs/default.yaml --device cuda --single-person \
+python train.py --config configs/default.yaml --device cuda \
   --resume /transfer/stc-checkpoints/stc_epoch50.pth
 ```
 
-Checkpoints saved to `/transfer/stc-checkpoints/stc_epoch*.pth`.
+### 2) Flow Matching experiment
 
-### Hyperparameters
+```bash
+PYTHONPATH=. python experiments/flow_matching/train.py \
+  --config experiments/flow_matching/configs/default.yaml \
+  --device cuda
+```
 
-| Parameter | Value |
-|-----------|-------|
-| Frames (T) | 48 (2s @ 24fps) |
-| Person dim | 3 |
-| Camera dim | 6 |
-| Joint diffusion dim | 432 (48×9) |
-| Diffusion timesteps | 1000 (cosine schedule) |
-| Hidden dim | 256 |
-| Dual-branch layers | 6 |
-| Attention heads | 4 |
-| Batch size | 64 |
-| Learning rate | 1e-4 (AdamW) |
-| Epochs | 500 |
+### 3) Two-stage experiment
+
+```bash
+# Stage 1: text -> person
+PYTHONPATH=. python experiments/two_stage/train_stage1.py \
+  --config experiments/two_stage/configs/stage1.yaml --device cuda
+
+# Stage 2: text + person -> camera
+PYTHONPATH=. python experiments/two_stage/train_stage2.py \
+  --config experiments/two_stage/configs/stage2.yaml --device cuda
+```
 
 ---
 
 ## Inference
 
+### Baseline DDPM
+
 ```bash
 python generate.py \
   --checkpoint /transfer/stc-checkpoints/stc_final.pth \
   --text "A person walks toward camera" \
-  --motion dolly-in --shot-type medium-shot
+  --motion dolly-in \
+  --shot-type medium-shot \
+  --guidance-scale 3.0 \
+  --ddim --ddim-steps 50
 ```
 
-Outputs to `/transfer/stc-outputs/`:
-- `gen_person.npy` — person trajectory (48, 3)
-- `gen_camera.npy` — camera trajectory (48, 6)
-- `gen_joint.png` — visualization (3D paths + parameter curves)
+### Flow Matching
+
+```bash
+PYTHONPATH=. python experiments/flow_matching/generate.py \
+  --checkpoint /transfer/fm-v8-checkpoints/fm_final.pth \
+  --text "A person walks toward camera" \
+  --motion dolly-in \
+  --guidance-scale 3.0
+```
+
+### Two-stage
+
+```bash
+PYTHONPATH=. python experiments/two_stage/generate.py \
+  --stage1-ckpt /transfer/two-stage-checkpoints/stage1/stage1_final.pth \
+  --stage2-ckpt /transfer/two-stage-checkpoints/stage2/stage2_final.pth \
+  --text "A person walks toward camera" \
+  --motion dolly-in \
+  --ddim --ddim-steps 50
+```
+
+Typical outputs are saved as tagged files in the configured output directory, e.g.:
+
+- `gen_person_<tag>.npy` / `fm_person_<tag>.npy`
+- `gen_camera_<tag>.npy` / `fm_camera_<tag>.npy`
+- `gen_joint_<tag>.png` / `fm_joint_<tag>.png`
 
 ---
 
 ## Evaluation
 
+`evaluate.py` currently evaluates the baseline joint DDPM checkpoints:
+
 ```bash
 python evaluate.py \
   --checkpoint /transfer/stc-checkpoints/stc_final.pth \
-  --device cuda --single-person
+  --device cuda \
+  --single-person
 ```
 
-| Metric | Description |
-|--------|-------------|
-| Person MSE / MAE | Person trajectory reconstruction error |
-| Camera MSE / MAE | Camera trajectory reconstruction error |
-| Person jerk | Person motion smoothness |
-| Camera jerk | Camera motion smoothness |
-| Person-camera distance | Average person-to-camera distance (coordination) |
+Metrics include:
+
+- person/camera MSE and MAE
+- person/camera jerk
+- path length
+- camera-person distance statistics
+
+Results are saved to `evaluation_results.json` in the configured output directory.
 
 ---
 
-## Key Paths
+## Default paths in configs
 
-| Content | Path |
-|---------|------|
-| E.T. raw dataset | `/transfer/et-data` |
-| Preprocessed data | `/transfer/stc-data` |
-| Checkpoints | `/transfer/stc-checkpoints` |
-| Outputs | `/transfer/stc-outputs` |
+### Baseline (`configs/default.yaml`)
+
+- data root: `/transfer/stc-data`
+- checkpoints: `/transfer/stc-checkpoints`
+- outputs: `/transfer/stc-outputs`
+- logs: `/transfer/stc-logs`
+
+### Flow Matching (`experiments/flow_matching/configs/default.yaml`)
+
+- data root: `/transfer/merged-v8`
+- checkpoints: `/transfer/fm-v8-checkpoints`
+- outputs: `/transfer/fm-v8-outputs`
+- logs: `/transfer/fm-v8-logs`
+
+### Two-stage
+
+- stage1 ckpt: `/transfer/two-stage-checkpoints/stage1`
+- stage2 ckpt: `/transfer/two-stage-checkpoints/stage2`
+- outputs: `/transfer/two-stage-outputs`
+
+---
+
+## Documentation and reports
+
+- Main report: `report_v2.md`
+- Previous report: `report_v1.md`
+- Notebook: `Text-to-Shot_Pipeline.ipynb`
+- Additional analysis: `docs/v7_yaw_failure_analysis.md`
 
 ---
 
 ## References
 
-- **E.T. / DIRECTOR**: Courant et al. (2024), "E.T. the Exceptional Trajectories" — dataset + camera diffusion model that generates camera trajectories *given* character motion as input
-- **DDPM**: Ho, Jain & Abbeel (2020), NeurIPS — diffusion framework
-- **CLIP**: Radford et al. (2021), ICML — text encoder
-- **FiLM**: Perez et al. (2018), AAAI — conditioning layer
-- **MDM**: Tevet et al. (2022), ICLR — motion diffusion model
-- **Toric Space**: Lino & Christie (2015), ACM TOG — camera parameterization
+- Courant et al., E.T. the Exceptional Trajectories (ECCV 2024)
+- Ho et al., Denoising Diffusion Probabilistic Models (NeurIPS 2020)
+- Ho and Salimans, Classifier-Free Guidance (NeurIPS Workshops 2021)
+- Lipman et al., Flow Matching for Generative Modeling (ICLR 2023)
+- Radford et al., CLIP (ICML 2021)
