@@ -2,15 +2,15 @@
 Dataset for joint person-camera trajectory diffusion training.
 
 Each sample contains:
-- Person root trajectory: (T, 4) world positions + yaw [px, py, pz, yaw]
+- Person root trajectory: (T, 5) world positions + sin/cos yaw [px, py, pz, sin_yaw, cos_yaw]
 - Camera trajectory: (T, 6) camera state (tx, ty, tz, azimuth, elevation, roll)
 - Text description
 - Shot type label
 - Camera motion type label
 
-Joint representation: y = [person_flat (T*4), camera_flat (T*6)]
+Joint representation: y = [person_flat (T*5), camera_flat (T*6)]
 
-Backward compatible: old (T, 3) person files are zero-padded to (T, 4).
+Backward compatible: old (T, 3) person files are padded to (T, 5) with sin(0)=0, cos(0)=1.
 """
 
 import torch
@@ -129,12 +129,15 @@ class JointTrajectoryDataset(Dataset):
         """Load a trajectory array from the sample entry.
 
         Handles backward compatibility: if loaded array has fewer columns
-        than expected dim (e.g., old (T,3) files when person_dim=4),
-        pads with zeros for missing columns.
+        than expected dim (e.g., old (T,3) files when person_dim=5),
+        pads with appropriate defaults. For person trajectories, missing
+        yaw columns are padded with sin(0)=0, cos(0)=1.
         """
         path_key = key
         if path_key not in sample and fallback_key and fallback_key in sample:
             path_key = fallback_key
+
+        is_person = (key == 'person_trajectory_path')
 
         if path_key in sample:
             traj_path = os.path.join(self.data_root, sample[path_key])
@@ -151,14 +154,24 @@ class JointTrajectoryDataset(Dataset):
                             break
                 # Pad columns if loaded has fewer dims than expected
                 if traj.ndim == 2 and traj.shape[1] < dim:
-                    pad_width = dim - traj.shape[1]
-                    traj = np.concatenate(
-                        [traj, np.zeros((traj.shape[0], pad_width), dtype=np.float32)],
-                        axis=1)
+                    if is_person and traj.shape[1] == 3 and dim == 5:
+                        # Pad (T,3) → (T,5) with sin(0)=0, cos(0)=1
+                        T = traj.shape[0]
+                        zeros = np.zeros((T, 1), dtype=np.float32)
+                        ones = np.ones((T, 1), dtype=np.float32)
+                        traj = np.concatenate([traj, zeros, ones], axis=1)
+                    else:
+                        pad_width = dim - traj.shape[1]
+                        traj = np.concatenate(
+                            [traj, np.zeros((traj.shape[0], pad_width), dtype=np.float32)],
+                            axis=1)
                 return traj
 
-        # Fallback: zeros
-        return np.zeros((self.num_frames, dim), dtype=np.float32)
+        # Fallback: zeros (for person, set cos_yaw=1 at column 4)
+        fallback = np.zeros((self.num_frames, dim), dtype=np.float32)
+        if is_person and dim >= 5:
+            fallback[:, 4] = 1.0  # cos(0) = 1
+        return fallback
 
     def denormalize(self, y: torch.Tensor) -> torch.Tensor:
         """Undo normalization. y: (..., total_dim)"""

@@ -69,7 +69,7 @@ class Stage1PersonDenoiser(nn.Module):
         super().__init__()
         self.person_dim = person_dim
         self.num_frames = num_frames
-        self.total_dim = person_dim * num_frames  # 144
+        self.total_dim = person_dim * num_frames  # 240
 
         # Condition: text(512) + timestep(128) + motion_type(64) = 704
         condition_dim = text_dim + timestep_dim + motion_type_dim

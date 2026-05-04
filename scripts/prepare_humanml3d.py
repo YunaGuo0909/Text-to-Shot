@@ -9,7 +9,7 @@ Only processes motions whose source AMASS files exist locally.
 
 Outputs (same format as other prepare_* scripts):
   - <output-root>/camera_trajectories/*.npy  (48, 6)
-  - <output-root>/person_trajectories/*.npy  (48, 4)
+  - <output-root>/person_trajectories/*.npy  (48, 5)
   - <output-root>/train_index.json
 
 Usage:
@@ -140,8 +140,8 @@ def resolve_amass_path(source_path, amass_root):
 
 def extract_person_traj(npz_path, start_frame, end_frame, num_frames=48):
     """
-    Load AMASS .npz, extract root position + yaw for specified frame range.
-    Returns (num_frames, 4) or None.
+    Load AMASS .npz, extract root position + sin/cos yaw for specified frame range.
+    Returns (num_frames, 5) or None.
     """
     try:
         data = np.load(npz_path, allow_pickle=True)
@@ -187,8 +187,10 @@ def extract_person_traj(npz_path, start_frame, end_frame, num_frames=48):
             if ro_clip.shape[1] >= 3:
                 yaw[i] = axis_angle_to_yaw(ro_clip[i, :3])
 
-    # Combine to (T, 4)
-    person_traj = np.concatenate([trans_clip, yaw.reshape(-1, 1)], axis=1)
+    # Combine to (T, 5) with sin/cos yaw
+    sin_yaw = np.sin(yaw).reshape(-1, 1)
+    cos_yaw = np.cos(yaw).reshape(-1, 1)
+    person_traj = np.concatenate([trans_clip, sin_yaw, cos_yaw], axis=1)
 
     # Resample to target frames
     person_traj = resample_trajectory(person_traj, num_frames)

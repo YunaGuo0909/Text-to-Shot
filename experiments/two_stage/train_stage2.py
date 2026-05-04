@@ -62,7 +62,7 @@ def train(config, args):
     camera_dim = model_cfg['camera_dim']
     person_dim = model_cfg['person_dim']
     num_frames = traj_cfg['default_num_frames']
-    person_total = person_dim * num_frames  # 144
+    person_total = person_dim * num_frames  # 240
     camera_total = camera_dim * num_frames  # 288
 
     text_encoder = build_text_encoder(config, device, use_clip=not args.no_clip)

@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--output', type=str, default=None,
                         help='Output path (default: <data-root>/norm_stats.json)')
     parser.add_argument('--num-frames', type=int, default=48)
-    parser.add_argument('--person-dim', type=int, default=3)
+    parser.add_argument('--person-dim', type=int, default=5)
     parser.add_argument('--camera-dim', type=int, default=6)
     args = parser.parse_args()
 

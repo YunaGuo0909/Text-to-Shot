@@ -10,7 +10,7 @@ produce balanced augmentation data.
 
 Outputs (same format as E.T. preprocessed data):
   - <output-root>/camera_trajectories/*.npy  (48, 6)
-  - <output-root>/person_trajectories/*.npy  (48, 4)  [px, py, pz, yaw]
+  - <output-root>/person_trajectories/*.npy  (48, 5)  [px, py, pz, sin_yaw, cos_yaw]
   - <output-root>/train_index.json
 
 Usage:
@@ -137,8 +137,8 @@ def infer_action(person_traj: np.ndarray) -> str:
     """
     Infer action from person trajectory with multi-phase awareness.
 
-    Accepts (T, 3) or (T, 4) trajectories. If dim 4 is present, uses yaw
-    to detect turning and enriches the description.
+    Accepts (T, 3) or (T, 5) trajectories. If dim 5 is present (sin_yaw, cos_yaw),
+    recovers yaw via atan2 to detect turning and enriches the description.
 
     Strategy:
     1. Check overall speed — if very slow → stationary.
@@ -184,9 +184,9 @@ def infer_action(person_traj: np.ndarray) -> str:
             else:
                 base = "moves in multiple directions"
 
-    # Enrich with yaw information if available (dim 4)
-    if person_traj.shape[1] >= 4:
-        yaw = person_traj[:, 3]
+    # Enrich with yaw information if available (dim 5: sin_yaw, cos_yaw)
+    if person_traj.shape[1] >= 5:
+        yaw = np.arctan2(person_traj[:, 3], person_traj[:, 4])
         # Total yaw change (handle wraparound)
         yaw_diff = np.diff(yaw)
         # Wrap to [-pi, pi]
@@ -222,7 +222,7 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
     Generate a synthetic camera trajectory for a person trajectory.
 
     Args:
-        person_traj: (T, 3) or (T, 4) person root positions (only xyz used).
+        person_traj: (T, 3) or (T, 5) person root positions (only xyz used).
         motion_type: one of ALL_MOTION_TYPES.
         num_frames: number of frames (should match person_traj.shape[0]).
 
@@ -428,7 +428,7 @@ def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
         root_orient: (T_source, 3) axis-angle root orientation, or None.
 
     Returns:
-        List of (chunk_frames, 4) numpy arrays [px, py, pz, yaw].
+        List of (chunk_frames, 5) numpy arrays [px, py, pz, sin_yaw, cos_yaw].
     """
     T_src = trans.shape[0]
     duration_sec = T_src / source_fps
@@ -440,12 +440,15 @@ def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
     # Extract yaw from root orientation if available
     if root_orient is not None and root_orient.shape[0] == T_src:
         yaws = extract_yaw_from_axis_angle(root_orient)  # (T_src,)
-        # Combine trans + yaw → (T_src, 4)
-        combined = np.concatenate([trans, yaws.reshape(-1, 1)], axis=1)
+        sin_yaw = np.sin(yaws).reshape(-1, 1)
+        cos_yaw = np.cos(yaws).reshape(-1, 1)
+        # Combine trans + sin_yaw + cos_yaw → (T_src, 5)
+        combined = np.concatenate([trans, sin_yaw, cos_yaw], axis=1)
     else:
-        # No orientation: pad with zeros for yaw
-        combined = np.concatenate(
-            [trans, np.zeros((T_src, 1), dtype=np.float32)], axis=1)
+        # No orientation: pad with sin(0)=0, cos(0)=1
+        zeros = np.zeros((T_src, 1), dtype=np.float32)
+        ones = np.ones((T_src, 1), dtype=np.float32)
+        combined = np.concatenate([trans, zeros, ones], axis=1)
 
     # Resample to target_fps (all 4 dims)
     resampled = resample_trajectory(combined, T_target)

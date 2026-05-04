@@ -33,7 +33,7 @@ The baseline approach (DIRECTOR, Courant et al., 2024) conditions camera generat
 
 ### 3.1 Problem Formulation
 
-The model generates a joint trajectory vector $y = [\text{person\_flat}, \text{camera\_flat}]$ of dimension 432 (48 frames × 3 person + 48 frames × 6 camera). Camera state is $(t_x, t_y, t_z, \text{azimuth}, \text{elevation}, \text{roll})$. Person state is the SMPL-H root translation $(p_x, p_y, p_z)$.
+The model generates a joint trajectory vector $y = [\text{person\_flat}, \text{camera\_flat}]$. Camera state per frame is $(t_x, t_y, t_z, \text{azimuth}, \text{elevation}, \text{roll})$ (6 dimensions). Person state per frame is $(p_x, p_y, p_z, \sin(\text{yaw}), \cos(\text{yaw}))$ (5 dimensions), where yaw encodes the root body facing direction using a continuous sin/cos representation to avoid angular discontinuities. With 48 frames at 24 fps (2 seconds), the total joint vector dimension is $48 \times (5 + 6) = 528$.
 
 ### 3.2 Architecture
 
@@ -167,7 +167,31 @@ One line of code. The post-fix model (v2) produced structured outputs with visib
 
 **[INSERT: Side-by-side comparison of FM v1 (noise) vs FM v2 (structured) generated trajectories]**
 
-### 5.6 Mode Collapse in Joint Diffusion Models
+### 5.6 Angular Wraparound in Person Yaw Representation
+
+To support person facing direction, the person trajectory was extended from $(p_x, p_y, p_z)$ to $(p_x, p_y, p_z, \text{yaw})$, where yaw is the root body orientation around the vertical axis, extracted from the SMPL-H `global_orient` field. This increased person_dim from 3 to 4 and total joint dimension from 432 to 480.
+
+The extended model (v7, trained on 660k samples including HumanML3D annotations) converged to a training loss of 0.241 but produced completely flat outputs at inference. All motion types generated identical stationary trajectories, a total mode collapse that was absent in the previous version (v6, person_dim=3) which had successfully differentiated orbit, dolly-in, static, and track.
+
+The root cause was the angular wraparound discontinuity. Yaw in radians has range $[-\pi, \pi]$, where $-\pi$ and $+\pi$ represent the same physical direction but differ numerically by $2\pi \approx 6.28$. Flow Matching interpolates between noise and data along straight lines in the data space:
+
+$$x_t = (1-t)\epsilon + t \cdot x_0$$
+
+This interpolation assumes the data space is Euclidean. For position dimensions this holds, but for yaw it does not. When the training set contains samples with yaw near $+\pi$ and samples with yaw near $-\pi$, the model receives contradictory gradient signals. The MSE-optimal compromise is to predict yaw $\approx 0$ for all inputs, collapsing the yaw dimension and destabilising the other dimensions through the shared hidden representation.
+
+Inspection of the training data confirmed the issue. One sample showed yaw ranging from $-2.98$ to $+3.10$ radians within a single 48-frame clip. In angle space this is a 9-degree turn. In the raw representation it is a 6.08-unit jump that the model cannot interpolate through correctly.
+
+The fix was to replace the raw yaw angle with its sine and cosine components:
+
+$$(\text{yaw}) \rightarrow (\sin(\text{yaw}), \cos(\text{yaw}))$$
+
+This changes person_dim from 4 to 5. The sin/cos representation is continuous everywhere, with no discontinuity at $\pm\pi$. Two directions that are close in angle space (e.g., $-2.98$ and $+3.10$ radians) map to nearby points in sin/cos space: $(-0.16, -0.99)$ and $(0.04, -1.00)$, a Euclidean distance of only 0.20. Linear interpolation between these points correctly traces through the "backward-facing" region of the circle.
+
+This is the standard approach for encoding angular quantities in neural networks, used in MDM (Tevet et al., 2023), MotionDiffuse (Zhang et al., 2022), and other motion generation works. At inference time, the original angle is recovered via $\text{yaw} = \text{atan2}(\sin, \cos)$.
+
+This failure illustrates a broader principle: the topology of each data dimension must match the generative model's interpolation assumptions. Flow matching and diffusion models assume Euclidean geometry. Circular quantities require explicit embedding into a Euclidean space (sin/cos) before they can be modelled by these frameworks.
+
+### 5.7 Mode Collapse in Joint Diffusion Models
 
 All DDPM-based joint generation models collapsed to producing nearly identical outputs regardless of motion type conditioning. Analysis identified three contributing factors:
 
@@ -261,11 +285,12 @@ Raw model outputs contain high-frequency oscillations in the person trajectory (
 
 ### Future Work
 
-1. **Full AMASS integration**: Re-run preprocessing with improved multi-phase action inference, re-merge, and retrain.
-2. **Spatial constraint loss**: Add a differentiable camera-to-person distance loss using AMASS samples where distance ground truth is exact.
-3. **LLM prompt normalisation**: Add a lightweight LLM rewriting layer (Gemini Flash free tier) at inference time to normalise arbitrary user input to the E.T./AMASS caption style before CLIP encoding, reducing the train-inference text distribution gap.
-4. **Larger model**: The current 24.7M parameter model may be under-parameterised for a 432-dimensional joint generation task. Scaling to 512 hidden dimensions would increase capacity with modest compute cost.
-5. **Temporal consistency loss**: Add a velocity smoothness term directly on the generated trajectories to reduce Euler integration oscillations without relying on post-processing.
+1. **HumanML3D full integration**: The current training set includes 9,303 HumanML3D motions matched to locally available AMASS subsets (CMU, ACCAD, BMLrub, KIT, Eyes_Japan_Dataset). Downloading the remaining AMASS subsets (BMLmovi, HDM05, SSM_synced) would increase HumanML3D coverage from 64% to approximately 90%, adding high-quality human-written captions for over 13,000 motions.
+2. **LLM prompt normalisation**: Add a lightweight LLM rewriting layer (Gemini Flash free tier) at inference time to normalise arbitrary user input to the training caption style before CLIP encoding, reducing the train-inference text distribution gap.
+3. **Camera-relative-position conditioning**: Encode the initial camera-to-person relative position (front, behind, left, right) in the text caption during training, enabling users to specify "camera behind the person" at inference.
+4. **3D visualisation with human mesh**: Replace stick-figure/point visualisation with SMPL body meshes or bounding-box proxies, using the generated yaw to orient the person model correctly.
+5. **Spatial constraint loss**: Add a differentiable camera-to-person distance loss using AMASS samples where distance ground truth is exact.
+6. **Temporal consistency loss**: Add a velocity smoothness term directly on the generated trajectories to reduce Euler integration oscillations without relying on post-processing.
 
 ---
 

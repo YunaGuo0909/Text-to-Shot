@@ -38,7 +38,7 @@ from src.models.denoiser import JointTrajectoryDenoiser
 from src.models.diffusion import GaussianDiffusion
 
 denoiser = JointTrajectoryDenoiser(
-    person_dim=3, camera_dim=6, num_frames=48,
+    person_dim=5, camera_dim=6, num_frames=48,
     hidden_dim=128, num_layers=2, num_heads=4,
     text_dim=512, timestep_dim=128,
     num_shot_types=5, shot_type_dim=64,

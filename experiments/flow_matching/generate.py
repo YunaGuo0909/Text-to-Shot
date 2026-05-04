@@ -93,10 +93,10 @@ def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
     - If overall displacement is small, freeze to stationary.
     - Otherwise, detect segments of roughly linear motion and straighten each.
     - Connect segments with smooth cubic interpolation for turns.
-    - If yaw (dim 3) is present, smooth it separately with angular wraparound.
+    - If sin/cos yaw (dims 3-4) are present, smooth them and renormalize.
 
     Args:
-        traj: (T, 3) or (T, 4) person root positions [+ yaw]
+        traj: (T, 3) or (T, 5) person root positions [+ sin_yaw, cos_yaw]
         static_threshold: if total displacement < this, person is stationary
         segment_cost: penalty for adding a new segment (higher = fewer segments)
 
@@ -107,9 +107,10 @@ def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
     D = traj.shape[1]
     pos_dims = min(D, 3)  # position dims are 0-2
 
-    # Separate yaw if present
-    has_yaw = D >= 4
-    yaw = traj[:, 3].copy() if has_yaw else None
+    # Separate sin/cos yaw if present (dim >= 5)
+    has_yaw = D >= 5
+    sin_yaw = traj[:, 3].copy() if has_yaw else None
+    cos_yaw = traj[:, 4].copy() if has_yaw else None
     pos = traj[:, :pos_dims]
 
     # 1. If person barely moves, freeze completely
@@ -118,9 +119,9 @@ def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
     if total_disp < static_threshold and max_range < static_threshold:
         result = np.tile(pos.mean(axis=0), (T, 1))
         if has_yaw:
-            # Smooth yaw with angular averaging for static person
-            smoothed_yaw = _smooth_angular(yaw, window=31)
-            result = np.concatenate([result, smoothed_yaw.reshape(-1, 1)], axis=1)
+            # Smooth sin/cos yaw and renormalize for static person
+            s_smooth, c_smooth = _smooth_sincos(sin_yaw, cos_yaw, window=31)
+            result = np.concatenate([result, s_smooth.reshape(-1, 1), c_smooth.reshape(-1, 1)], axis=1)
         return result
 
     # 2. Find optimal breakpoints using simple greedy segmentation
@@ -177,31 +178,34 @@ def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
     else:
         result_pos = pos.copy()
 
-    # 6. Handle yaw smoothing with angular wraparound
+    # 6. Handle sin/cos yaw smoothing
     if has_yaw:
-        smoothed_yaw = _smooth_angular(yaw, window=15)
-        result = np.concatenate([result_pos, smoothed_yaw.reshape(-1, 1)], axis=1)
+        s_smooth, c_smooth = _smooth_sincos(sin_yaw, cos_yaw, window=15)
+        result = np.concatenate([result_pos, s_smooth.reshape(-1, 1), c_smooth.reshape(-1, 1)], axis=1)
     else:
         result = result_pos
 
     return result
 
 
-def _smooth_angular(angles, window=15):
+def _smooth_sincos(sin_vals, cos_vals, window=15):
     """
-    Smooth an angular signal handling wraparound at +/-pi.
+    Smooth sin/cos yaw components independently, then renormalize to unit circle.
 
-    Uses unwrap -> Savitzky-Golay filter -> re-wrap approach.
+    Since sin and cos are already continuous (no wraparound), standard
+    Savitzky-Golay smoothing works directly.
     """
-    unwrapped = np.unwrap(angles)
-    w = min(window, len(unwrapped) if len(unwrapped) % 2 == 1 else len(unwrapped) - 1)
+    w = min(window, len(sin_vals) if len(sin_vals) % 2 == 1 else len(sin_vals) - 1)
     w = max(w, 3)
     if w % 2 == 0:
         w -= 1
-    smoothed = savgol_filter(unwrapped, window_length=w, polyorder=2)
-    # Re-wrap to [-pi, pi]
-    smoothed = (smoothed + np.pi) % (2 * np.pi) - np.pi
-    return smoothed.astype(np.float32)
+    sin_smooth = savgol_filter(sin_vals, window_length=w, polyorder=2)
+    cos_smooth = savgol_filter(cos_vals, window_length=w, polyorder=2)
+    # Renormalize to unit circle
+    norm = np.sqrt(sin_smooth**2 + cos_smooth**2) + 1e-8
+    sin_smooth = sin_smooth / norm
+    cos_smooth = cos_smooth / norm
+    return sin_smooth.astype(np.float32), cos_smooth.astype(np.float32)
 
 
 @torch.no_grad()

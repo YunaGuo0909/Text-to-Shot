@@ -287,12 +287,12 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
         )
         ax2.add_patch(tri)
 
-    # Person facing direction arrows (if yaw is available, dim >= 4)
-    if person_traj.shape[1] >= 4:
+    # Person facing direction arrows (if sin/cos yaw is available, dim >= 5)
+    if person_traj.shape[1] >= 5:
         person_arrow_len = scene_extent * 0.10
         for i in range(0, num_frames, arrow_interval):
             px, pz = person_traj[i, 0], person_traj[i, 2]
-            yaw = person_traj[i, 3]
+            yaw = np.arctan2(person_traj[i, 3], person_traj[i, 4])
             # Person forward direction in XZ plane from yaw
             pfx, pfz = np.sin(yaw), np.cos(yaw)
             ax2.annotate('', xy=(px + pfx * person_arrow_len, pz + pfz * person_arrow_len),
@@ -343,15 +343,13 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     ax5 = fig.add_subplot(235, facecolor='#2C3E50')
     person_labels = ['px', 'py', 'pz']
     person_colors = ['#4ECDC4', '#95E66D', '#C44ECD']
-    if person_traj.shape[1] >= 4:
-        person_labels.append('yaw')
-        person_colors.append('#FF9F43')
     for i, (name, c) in enumerate(zip(person_labels, person_colors)):
-        vals = person_traj[:, i]
-        if name == 'yaw':
-            vals = np.degrees(vals)
-        ax5.plot(t_axis, vals, color=c, linewidth=1.5, label=name)
-    ax5.set_title('Person Position' + (' + Yaw' if person_traj.shape[1] >= 4 else ''),
+        ax5.plot(t_axis, person_traj[:, i], color=c, linewidth=1.5, label=name)
+    if person_traj.shape[1] >= 5:
+        # Recover yaw from sin/cos for display
+        yaw_deg = np.degrees(np.arctan2(person_traj[:, 3], person_traj[:, 4]))
+        ax5.plot(t_axis, yaw_deg, color='#FF9F43', linewidth=1.5, label='yaw (deg)')
+    ax5.set_title('Person Position' + (' + Yaw' if person_traj.shape[1] >= 5 else ''),
                   color='white', fontsize=10)
     ax5.set_xlabel('time', color='gray', fontsize=8)
     ax5.legend(fontsize=8, labelcolor='white', framealpha=0.3)

@@ -3,7 +3,7 @@
 
 model:
   camera_dim: 6
-  person_dim: 4
+  person_dim: 5
   hidden_dim: 256
   num_layers: 6
   num_heads: 4
@@ -48,7 +48,7 @@ training:
   lr_scheduler: cosine
   warmup_epochs: 10
   gradient_clip: 1.0
-  save_interval: 25
+  save_interval: 10
   eval_interval: 10
   cfg_dropout_prob: 0.25
   aux_loss_weight: 0.0
@@ -57,14 +57,14 @@ training:
   augmentation: true
 
 data:
-  data_root: "/transfer/merged-v7"
+  data_root: "/transfer/merged-v8"
   train_index_file: "train_index.json"
   test_index_file: "test_index.json"
-  norm_stats_path: "/transfer/merged-v7/norm_stats.json"
+  norm_stats_path: "/transfer/merged-v8/norm_stats.json"
   num_workers: 4
   pin_memory: true
 
 paths:
-  checkpoint_dir: "/transfer/fm-v7-checkpoints"
-  output_dir: "/transfer/fm-v7-outputs"
-  log_dir: "/transfer/fm-v7-logs"
+  checkpoint_dir: "/transfer/fm-v8-checkpoints"
+  output_dir: "/transfer/fm-v8-outputs"
+  log_dir: "/transfer/fm-v8-logs"

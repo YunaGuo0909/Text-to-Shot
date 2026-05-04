@@ -58,24 +58,31 @@ class AugmentedTrajectoryDataset(JointTrajectoryDataset):
         }
 
     def _augment(self, person_traj, camera_traj):
-        # person_traj: (T, 3) = [px, py, pz]
+        # person_traj: (T, 5) = [px, py, pz, sin_yaw, cos_yaw]
         # camera_traj: (T, 6) = [tx, ty, tz, azimuth, elevation, roll]
         person_traj = person_traj.copy()
         camera_traj = camera_traj.copy()
+        has_yaw = person_traj.shape[1] >= 5
 
-        # 1. Mirror X (50%)
+        # 1. Mirror X (50%): px -> -px, azimuth -> -azimuth, yaw -> -yaw
+        #    sin(-yaw) = -sin(yaw), cos(-yaw) = cos(yaw)
         if np.random.rand() < 0.5:
             person_traj[:, 0] *= -1.0
             camera_traj[:, 0] *= -1.0
             camera_traj[:, 3] *= -1.0  # negate azimuth
+            if has_yaw:
+                person_traj[:, 3] *= -1.0  # negate sin_yaw
 
-        # 2. Mirror Z (50%)
+        # 2. Mirror Z (50%): pz -> -pz, azimuth -> pi - azimuth, yaw -> pi - yaw
+        #    sin(pi - yaw) = sin(yaw), cos(pi - yaw) = -cos(yaw)
         if np.random.rand() < 0.5:
             person_traj[:, 2] *= -1.0
             camera_traj[:, 2] *= -1.0
             camera_traj[:, 3] = np.pi - camera_traj[:, 3]  # azimuth -> pi - azimuth
+            if has_yaw:
+                person_traj[:, 4] *= -1.0  # negate cos_yaw
 
-        # 3. Random spatial offset (always)
+        # 3. Random spatial offset (position dims only, yaw unaffected)
         offset = np.random.randn(3).astype(np.float32) * 0.1
         person_traj[:, 0] += offset[0]
         person_traj[:, 1] += offset[1]

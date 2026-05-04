@@ -1,15 +1,15 @@
 """
 Preprocess E.T. dataset for joint person-camera trajectory training.
 
-Extracts BOTH camera trajectory (T, 6) and person trajectory (T, 4) per sample.
+Extracts BOTH camera trajectory (T, 6) and person trajectory (T, 5) per sample.
 
 Camera: 3x4 extrinsic matrices → (tx, ty, tz, azimuth, elevation, roll)
-Person: If character joint data exists, extract root position + yaw.
-        Otherwise, estimate look-at point from camera as person proxy (yaw=0).
+Person: If character joint data exists, extract root position + sin/cos yaw.
+        Otherwise, estimate look-at point from camera as person proxy (sin_yaw=0, cos_yaw=1).
 
 Outputs:
   - stc-data/camera_trajectories/*.npy  (T, 6)
-  - stc-data/person_trajectories/*.npy  (T, 4)
+  - stc-data/person_trajectories/*.npy  (T, 5)
   - stc-data/train_index.json
   - stc-data/test_index.json
 
@@ -92,7 +92,7 @@ def load_person_joints(joints_dir: str, sample_id: str):
     (T, 1, 3, 3) root rotation matrix to derive yaw.
 
     Also supports .npy/.npz formats as fallback.
-    Returns (T, 4) [px, py, pz, yaw] or (T, 3) [px, py, pz] if no orientation, or None.
+    Returns (T, 5) [px, py, pz, sin_yaw, cos_yaw] or (T, 3) [px, py, pz] if no orientation, or None.
     """
     import torch
 
@@ -138,8 +138,10 @@ def load_person_joints(joints_dir: str, sample_id: str):
                                 yaws[t] = rotation_matrix_to_yaw(global_orient[t])
                     except Exception:
                         pass  # yaws stays zeros
-                    result = np.concatenate([positions, yaws[:T_frames].reshape(-1, 1)], axis=1)
-                    return result  # (T, 4)
+                    sin_yaw = np.sin(yaws[:T_frames]).reshape(-1, 1)
+                    cos_yaw = np.cos(yaws[:T_frames]).reshape(-1, 1)
+                    result = np.concatenate([positions, sin_yaw, cos_yaw], axis=1)
+                    return result  # (T, 5)
                 elif positions is not None:
                     return positions  # (T, 3) fallback
         except Exception as e:
@@ -313,7 +315,7 @@ def main():
             stats['skipped'] += 1
             continue
 
-        # Person trajectory (T, 4) = [px, py, pz, yaw]
+        # Person trajectory (T, 5) = [px, py, pz, sin_yaw, cos_yaw]
         person_traj = None
         if joints_dir:
             person_traj = load_person_joints(joints_dir, sample_id)
@@ -325,11 +327,12 @@ def main():
 
         if person_traj is not None:
             person_traj = resample_trajectory(person_traj, args.num_frames)
-            # Pad to (T, 4) if only (T, 3) was returned (no orientation)
+            # Pad to (T, 5) if only (T, 3) was returned (no orientation)
             if person_traj.shape[1] == 3:
+                zeros = np.zeros((person_traj.shape[0], 1), dtype=np.float32)
+                ones = np.ones((person_traj.shape[0], 1), dtype=np.float32)
                 person_traj = np.concatenate(
-                    [person_traj, np.zeros((person_traj.shape[0], 1), dtype=np.float32)],
-                    axis=1)
+                    [person_traj, zeros, ones], axis=1)  # sin(0)=0, cos(0)=1
             stats['has_joints'] += 1
             has_real_person = True
         else:
@@ -341,10 +344,11 @@ def main():
                 [extrinsic_to_lookat(R, t, args.lookat_distance) for R, t in frames],
                 axis=0)
             person_positions = resample_trajectory(person_positions, args.num_frames)
-            # Pad with zeros for yaw → (T, 4)
+            # Pad with sin(0)=0, cos(0)=1 for yaw → (T, 5)
+            zeros = np.zeros((person_positions.shape[0], 1), dtype=np.float32)
+            ones = np.ones((person_positions.shape[0], 1), dtype=np.float32)
             person_traj = np.concatenate(
-                [person_positions, np.zeros((person_positions.shape[0], 1), dtype=np.float32)],
-                axis=1)
+                [person_positions, zeros, ones], axis=1)
             stats['lookat_proxy'] += 1
             has_real_person = False
 

@@ -61,7 +61,7 @@ def train(config, args):
     traj_cfg = config['trajectory']
     person_dim = model_cfg['person_dim']
     num_frames = traj_cfg['default_num_frames']
-    person_total = person_dim * num_frames  # 144
+    person_total = person_dim * num_frames  # 240
 
     text_encoder = build_text_encoder(config, device, use_clip=not args.no_clip)
 
