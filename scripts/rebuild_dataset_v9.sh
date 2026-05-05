@@ -40,7 +40,7 @@ PYTHONPATH=. python scripts/merge_datasets.py \
 
 echo ""
 echo "=== Step 5: Compute norm stats (person_dim=3) ==="
-python compute_norm_stats.py 3
+python compute_norm_stats.py 3 /transfer/merged-v9
 
 echo ""
 echo "=== Step 6: Verify with diagnostic ==="

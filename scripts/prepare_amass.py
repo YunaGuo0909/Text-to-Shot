@@ -806,9 +806,10 @@ def main():
         for chunk_idx, person_chunk in enumerate(chunks):
             action = infer_action(person_chunk)
 
-            # Generate camera for each single + combined motion type
-            all_types = ALL_MOTION_TYPES + COMBINED_MOTION_TYPES
-            for motion_type in all_types:
+            # Generate camera for each motion type (balanced data)
+            # Combined types disabled for now - same label with different
+            # trajectories would confuse the FiLM conditioning
+            for motion_type in ALL_MOTION_TYPES:
                 sample_id = f"amass_{base_name}_c{chunk_idx:04d}_{motion_type}"
 
                 result = generate_camera_for_person(
@@ -836,18 +837,11 @@ def main():
                     template = random.choice(CAPTION_TEMPLATES[motion_type])
                     caption = f"{shot_prefix}{template.format(action=action)}"
 
-                # For combined types, use primary type as label
-                # (model learns combination from text, not label)
-                if '_' in motion_type:
-                    label_motion = motion_type.split('_')[0]
-                else:
-                    label_motion = motion_type
-
                 entry = {
                     'id': sample_id,
                     'text': caption,
                     'shot_type': shot_type,
-                    'camera_motion': label_motion,
+                    'camera_motion': motion_type,
                     'camera_trajectory_path': f'camera_trajectories/{sample_id}.npy',
                     'person_trajectory_path': f'person_trajectories/{sample_id}.npy',
                     'has_real_person': True,
@@ -855,7 +849,7 @@ def main():
                 }
                 train_index.append(entry)
 
-                motion_counts[label_motion] = motion_counts.get(label_motion, 0) + 1
+                motion_counts[motion_type] += 1
                 shot_counts[shot_type] += 1
                 sample_counter += 1
 

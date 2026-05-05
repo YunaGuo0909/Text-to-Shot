@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 import sys
 
-DATA_ROOT = '/transfer/merged-v8'
+DATA_ROOT = sys.argv[2] if len(sys.argv) > 2 else '/transfer/merged-v9'
 PERSON_DIM = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CAMERA_DIM = 6
 NUM_FRAMES = 48

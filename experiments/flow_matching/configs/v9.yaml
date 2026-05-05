@@ -56,10 +56,10 @@ training:
   augmentation: true
 
 data:
-  data_root: "/transfer/merged-v8"
+  data_root: "/transfer/merged-v9"
   train_index_file: "train_index.json"
   test_index_file: "test_index.json"
-  norm_stats_path: "/transfer/merged-v8/norm_stats_v9.json"
+  norm_stats_path: "/transfer/merged-v9/norm_stats_v9.json"
   num_workers: 4
   pin_memory: true
 

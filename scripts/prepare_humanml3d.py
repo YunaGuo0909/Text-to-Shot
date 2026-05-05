@@ -277,9 +277,8 @@ def main():
             stats['load_fail'] += 1
             continue
 
-        # Generate camera for each single + combined motion type
-        all_types = ALL_MOTION_TYPES + COMBINED_MOTION_TYPES
-        for motion_type in all_types:
+        # Generate camera for each motion type (balanced)
+        for motion_type in ALL_MOTION_TYPES:
             sample_id = f"hml3d_{motion_id}_{motion_type}"
 
             camera_traj, shot_type = generate_camera_for_person(
@@ -290,12 +289,6 @@ def main():
 
             np.save(os.path.join(cam_out, f'{sample_id}.npy'), camera_traj)
             np.save(os.path.join(per_out, f'{sample_id}.npy'), person_traj)
-
-            # For combined types, use primary as label
-            if '_' in motion_type:
-                label_motion = motion_type.split('_')[0]
-            else:
-                label_motion = motion_type
 
             # Use human-written caption + camera motion description + shot type prefix
             person_caption = random.choice(captions)
@@ -314,7 +307,7 @@ def main():
                 'source': 'humanml3d',
             })
 
-            motion_counts[label_motion] = motion_counts.get(label_motion, 0) + 1
+            motion_counts[motion_type] += 1
             stats['samples'] += 1
 
     # Save index
