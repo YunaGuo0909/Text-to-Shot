@@ -300,7 +300,7 @@ def main():
                 'id': sample_id,
                 'text': cam_text,
                 'shot_type': shot_type,
-                'camera_motion': label_motion,
+                'camera_motion': motion_type,
                 'camera_trajectory_path': f'camera_trajectories/{sample_id}.npy',
                 'person_trajectory_path': f'person_trajectories/{sample_id}.npy',
                 'has_real_person': True,
