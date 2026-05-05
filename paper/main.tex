@@ -1,0 +1,341 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[margin=1in]{geometry}
+
+% Compact spacing
+\setlength{\columnsep}{0.25in}
+\setlength{\parskip}{0.5ex plus 0.2ex minus 0.1ex}
+
+\title{\textbf{Text-to-Shot: Joint Person-Camera Trajectory Generation\\from Text via Conditional Flow Matching}}
+
+\author{
+Yutong Guo\\
+\textit{Bournemouth University}\\
+\texttt{s5819307@bournemouth.ac.uk}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+\begin{abstract}
+We present Text-to-Shot, a system that jointly generates person root trajectories and cinematic camera trajectories from natural language descriptions. Unlike prior work that conditions camera generation on pre-existing character motion, our approach generates both outputs simultaneously from text alone, enabling fully automated scene pre-visualisation. We employ Conditional Flow Matching with a dual-branch Transformer denoiser featuring cross-attention between person and camera branches. Person orientation is encoded as $(\sin\theta, \cos\theta)$ components to avoid angular discontinuities in the flow matching interpolation. Training data is assembled from three complementary sources: the E.T.\ film dataset for naturalistic camera work, AMASS motion capture for accurate person trajectories with balanced camera labels, and HumanML3D for human-written motion descriptions. We demonstrate controllable generation across 9 camera motion types and provide a systematic analysis of failure modes including mode collapse, label noise, and angular representation issues encountered during development.
+\end{abstract}
+
+% ============================================================
+\section{Introduction}
+
+Pre-production storyboarding is a labour-intensive process that requires both creative vision and technical knowledge of cinematography. A director must specify not only what the characters do in a scene, but also how the camera should move to frame the action. Automating this pipeline from natural language descriptions would lower the barrier to creating professional-quality pre-visualisations.
+
+Recent work has made progress on camera trajectory generation from text. DIRECTOR~\cite{courant2024et} generates camera trajectories conditioned on pre-existing character motion, and GenDoP~\cite{gendop2025} produces auto-regressive camera paths from textual descriptions. However, these approaches assume the character motion is already available as input. PULP MOTION~\cite{pulpmotion2025} addresses joint generation of human motion and camera trajectories but requires an auxiliary framing modality.
+
+We propose Text-to-Shot, a system that generates both person root trajectories (including facing direction) and 6-DoF camera trajectories jointly from text alone, requiring no pre-existing character data. Our approach uses Conditional Flow Matching~\cite{lipman2023flow} with a dual-branch Transformer architecture where person and camera branches interact through cross-attention at every layer.
+
+Our contributions are:
+\begin{enumerate}
+\item Joint person-camera trajectory generation from text alone, without pre-existing character data.
+\item First application of Conditional Flow Matching to cinematographic trajectory generation, with analysis of angular representation requirements for flow-based models.
+\item A multi-source training pipeline combining E.T.~\cite{courant2024et} (film), AMASS~\cite{mahmood2019amass} (MoCap), and HumanML3D~\cite{guo2022humanml3d} (human-annotated) datasets with systematic label quality analysis.
+\item Comprehensive ablation across generative frameworks, data sources, and representation choices, documenting failure modes and solutions.
+\end{enumerate}
+
+% ============================================================
+\section{Related Work}
+
+\textbf{Camera trajectory generation.}
+E.T./DIRECTOR~\cite{courant2024et} introduced the first large-scale dataset of film camera trajectories paired with text descriptions and proposed a diffusion model that generates camera paths conditioned on character motion. Director3D~\cite{director3d2024} extends camera generation to include 3D scene synthesis. GenDoP~\cite{gendop2025} uses auto-regressive generation for camera trajectories from text. CameraCtrl and MotionCtrl integrate camera control into video diffusion models. Our work differs in generating both person and camera trajectories jointly from text alone.
+
+\textbf{Human motion generation.}
+MDM~\cite{tevet2023human} established diffusion-based motion generation from text. MotionDiffuse~\cite{zhang2022motiondiffuse} and MLD extended this with latent diffusion. These works generate full-body motion but do not address camera placement. Our model generates only person root position and orientation, which is sufficient for pre-production storyboarding where the camera-person spatial relationship matters more than detailed pose.
+
+\textbf{Joint person-camera generation.}
+PULP MOTION~\cite{pulpmotion2025} is the most closely related work, jointly generating human motion and camera trajectories with an auxiliary framing modality to enforce coherence. SymphoMotion addresses joint camera-object dynamics for video generation. Our approach uses text-only conditioning with flow matching instead of diffusion, and encodes person orientation as $(\sin\theta, \cos\theta)$ to handle angular discontinuities.
+
+\textbf{Flow Matching.}
+Conditional Flow Matching~\cite{lipman2023flow} provides an alternative to DDPM by learning a velocity field along straight interpolation paths. Recent applications include FLOAT~\cite{float2025} for talking portraits and GoalFlow for autonomous driving trajectories. We apply flow matching to the mixed Euclidean-angular space of cinematographic trajectories and identify representation requirements for angular dimensions.
+
+% ============================================================
+\section{Method}
+
+\subsection{Problem Formulation}
+
+Given a text description $c$, the model generates a joint trajectory $\mathbf{y} = [\mathbf{p}_\text{flat}, \mathbf{k}_\text{flat}]$ where $\mathbf{p} \in \mathbb{R}^{T \times 5}$ is the person trajectory and $\mathbf{k} \in \mathbb{R}^{T \times 6}$ is the camera trajectory, with $T = 48$ frames at 24~fps (2 seconds).
+
+The person state per frame is $(p_x, p_y, p_z, \sin\theta, \cos\theta)$, encoding root position and facing direction. The camera state is $(t_x, t_y, t_z, \alpha, \varepsilon, \rho)$ for translation, azimuth, elevation, and roll. The total joint vector dimension is $48 \times (5 + 6) = 528$.
+
+Additional conditioning signals include a shot type label (close-up, medium, wide) and a camera motion type label (static, dolly-in, dolly-out, pan-left, pan-right, crane-up, crane-down, track, orbit).
+
+\subsection{Architecture}
+
+The denoiser is a dual-branch Transformer with $L = 6$ layers, hidden dimension 256, and 4 attention heads ($\sim$24.7M parameters). Each layer contains:
+
+\begin{enumerate}
+\item \textbf{Self-attention}: each branch attends to its own temporal sequence
+\item \textbf{Cross-attention}: the person branch attends to the camera branch and vice versa
+\item \textbf{FiLM-conditioned FFN}: Feature-wise Linear Modulation~\cite{perez2018film} injects the conditioning vector $\mathbf{c} = [\text{CLIP}(c), \text{emb}(t), \text{emb}(s), \text{emb}(m)]$ where $t$ is the diffusion timestep, $s$ is shot type, and $m$ is motion type.
+\end{enumerate}
+
+The text encoder is a frozen CLIP ViT-B/32~\cite{radford2021clip} producing 512-dimensional embeddings. The conditioning vector totals 768 dimensions (512 + 128 + 64 + 64).
+
+\subsection{Conditional Flow Matching}
+
+We use the OT-CFM formulation~\cite{lipman2023flow}. The forward interpolant is:
+\begin{equation}
+\mathbf{x}_t = (1 - t) \boldsymbol{\epsilon} + t \mathbf{x}_0, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}), \quad t \in [0, 1]
+\end{equation}
+where $t = 0$ corresponds to noise and $t = 1$ to clean data. The target velocity is $\mathbf{v} = \mathbf{x}_0 - \boldsymbol{\epsilon}$.
+
+The training loss combines velocity prediction with temporal smoothness:
+\begin{equation}
+\mathcal{L} = \| \mathbf{v}_\theta(\mathbf{x}_t, t, \mathbf{c}) - \mathbf{v} \|^2 + \lambda \sum_{i=1}^{T-1} \| \boldsymbol{\alpha}_i - \boldsymbol{\alpha}_{i-1} \|^2
+\end{equation}
+where $\boldsymbol{\alpha}$ denotes predicted camera orientation angles and $\lambda = 0.05$.
+
+Classifier-Free Guidance~\cite{ho2022cfg} is applied with 25\% text dropout during training. Sampling uses Euler ODE integration over 50 steps.
+
+\textbf{Timestep mapping.} The Transformer's sinusoidal positional embedding was designed for DDPM's integer timestep convention (0 = clean, 999 = noisy). Flow matching's continuous $t$ is mapped as $t_\text{int} = \lfloor (1 - t) \times 999 \rfloor$ to align the conventions. An early implementation error that omitted the $(1-t)$ reversal caused complete training failure (Section~\ref{sec:timestep_bug}).
+
+\subsection{Angular Representation}
+\label{sec:angular}
+
+Person facing direction (yaw) is an angular quantity with range $[-\pi, \pi]$. Direct encoding as a scalar creates a discontinuity at $\pm\pi$: values $-2.98$ and $+3.10$ radians represent nearly the same direction but differ by 6.08 in Euclidean space.
+
+Flow matching interpolates along straight lines: $\mathbf{x}_t = (1-t)\boldsymbol{\epsilon} + t\mathbf{x}_0$. For angular dimensions, this interpolation produces physically meaningless intermediate values when data points straddle the $\pm\pi$ boundary. In practice, this causes the model to predict the circular mean (approximately zero) for all inputs, collapsing the yaw dimension and destabilising the remaining dimensions through the shared representation.
+
+We encode yaw as $(\sin\theta, \cos\theta)$, mapping the circular quantity to a continuous 2D Euclidean embedding:
+\begin{equation}
+\theta \rightarrow (\sin\theta, \cos\theta)
+\end{equation}
+This eliminates the discontinuity. At inference, the angle is recovered via $\theta = \text{atan2}(\sin\theta, \cos\theta)$. This is standard practice in motion generation~\cite{tevet2023human, zhang2022motiondiffuse} but its necessity for flow matching on mixed Euclidean-angular data has not been explicitly documented.
+
+% ============================================================
+\section{Data}
+
+\subsection{E.T.\ Dataset}
+
+The E.T.\ dataset~\cite{courant2024et} contains 114,603 samples extracted from real films using SLAHMR~\cite{ye2023slahmr}. After filtering for valid SMPL-H data and removing outliers (NaN values, displacements $>$100m), 64,948 samples remained. The dataset exhibits severe class imbalance: static shots comprise 66.7\% of samples, while orbit accounts for 0.0\%.
+
+A diagnostic analysis revealed that camera motion labels inferred from caption keywords have limited accuracy. For the dolly-in class, only 57.4\% of samples actually show decreasing camera-to-person distance, essentially random.
+
+\subsection{AMASS Augmentation}
+
+The AMASS motion capture dataset~\cite{mahmood2019amass} provides ground-truth 3D root translations and orientations. From five AMASS subsets (CMU, ACCAD, BMLrub, KIT, Eyes\_Japan\_Dataset), we extracted 57,533 two-second motion clips and generated synthetic camera trajectories for all 9 motion types deterministically, producing 517,797 samples with 100\% label accuracy and perfect class balance.
+
+Captions are generated from templates using trajectory-based action inference that detects movement direction and yaw changes exceeding 45 degrees, producing descriptions such as ``The camera pushes in while the character moves forward while turning left.'' Shot type prefixes (``Close Up.'', ``Wide Shot.'') are prepended for non-default shot types.
+
+\subsection{HumanML3D Integration}
+
+HumanML3D~\cite{guo2022humanml3d} provides 14,616 motions with 44,970 human-written text descriptions. Using the dataset's index mapping, 9,303 motions were matched to locally available AMASS files (63.6\% coverage). Each matched motion was paired with all 9 camera types, producing 83,700 samples with lexically diverse human-authored captions.
+
+\subsection{Final Dataset}
+
+The merged training set contains 660,050 samples. Data augmentation includes mirror-X (negating $p_x$, camera $t_x$, azimuth, and $\sin\theta$), mirror-Z (negating $p_z$, camera $t_z$, and $\cos\theta$), random spatial offsets, and temporal speed jitter.
+
+\begin{table}[t]
+\centering
+\caption{Training data composition.}
+\label{tab:data}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Source & Samples & Captions & Person Data \\
+\midrule
+E.T. & 64,948 & Film (moderate) & SLAHMR \\
+AMASS & 517,797 & Template & MoCap GT \\
+HumanML3D & 83,700 & \textbf{Human-written} & MoCap GT \\
+\midrule
+\textbf{Total} & \textbf{666,445} & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Experiments}
+
+\subsection{Setup}
+
+All models were trained on an NVIDIA RTX 4080 (16~GB) with AdamW ($\text{lr} = 10^{-4}$, cosine decay, 10-epoch warmup). Batch size was 64 with motion-type-balanced sampling. Training ran for 250 epochs.
+
+\subsection{Ablation: Generative Framework}
+
+\begin{table}[t]
+\centering
+\caption{Comparison of generative frameworks on E.T.\ data (58k samples).}
+\label{tab:framework}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & Val Loss & Gap & Result \\
+\midrule
+DDPM (uniform) & 0.471 & 5.3$\times$ & Mode collapse \\
+DDPM (balanced) & 0.657 & 9.7$\times$ & Mode collapse \\
+Flow Matching & 0.822 & 2.8$\times$ & Motion differentiation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All DDPM variants produced mode collapse regardless of sampling strategy or CFG tuning. Flow Matching produced the first successful differentiation between motion types.
+
+\subsection{Ablation: Data Sources}
+
+\begin{table}[t]
+\centering
+\caption{Effect of training data composition on Flow Matching.}
+\label{tab:data_ablation}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Data & Samples & Val Loss & Gap \\
+\midrule
+E.T.\ only & 58k & 0.822 & 2.8$\times$ \\
++ AMASS & 326k & 0.388 & 1.8$\times$ \\
++ HumanML3D & 660k & \textit{TBD} & \textit{TBD} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Adding AMASS reduced validation loss by 53\%, attributable to increased volume and improved label quality.
+
+\subsection{Ablation: Person Representation}
+
+\begin{table}[t]
+\centering
+\caption{Effect of person trajectory representation.}
+\label{tab:repr}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Representation & Dim & Val Loss & Result \\
+\midrule
+$(p_x, p_y, p_z)$ & 432 & 0.388 & Works \\
+$(p_x, p_y, p_z, \theta)$ & 480 & 0.466 & \textbf{Mode collapse} \\
+$(p_x, p_y, p_z, \sin\theta, \cos\theta)$ & 528 & \textit{TBD} & \textit{In progress} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The raw yaw representation caused complete mode collapse despite normal training loss convergence. Section~\ref{sec:angular} explains the mechanism.
+
+\subsection{Implementation Challenges}
+\label{sec:timestep_bug}
+
+Development revealed six distinct failure modes:
+
+\begin{enumerate}
+\item \textbf{Zero person trajectories}: old preprocessing omitted person data; dataset fallback returned all-zero arrays silently.
+\item \textbf{Silent exception swallowing}: \texttt{except: pass} concealed a \texttt{requires\_grad} error in SMPL-H tensor conversion, losing 97.8\% of person data.
+\item \textbf{Caption priority inversion}: camera-only captions were preferred over full character+camera captions.
+\item \textbf{SLAHMR numerical instability}: NaN and $10^{10}$-scale outliers from tracking failures corrupted normalisation statistics.
+\item \textbf{Timestep direction reversal}: Flow Matching $t{=}0$ (noise) was mapped to DDPM timestep 0 (clean), inverting the conditioning signal.
+\item \textbf{Angular wraparound}: raw yaw in $[-\pi, \pi]$ created discontinuities incompatible with flow matching's linear interpolation.
+\end{enumerate}
+
+Each failure produced models that trained without errors but generated meaningless outputs. The debugging methodology relied on normalisation statistics as early sanity checks, targeted diagnostic scripts, and mid-training generation tests.
+
+% ============================================================
+\section{Limitations and Future Work}
+
+The person representation is limited to root position and yaw; full-body pose is not modelled. Camera-person spatial coupling is learned implicitly through cross-attention but not explicitly constrained. The model responds more strongly to motion type conditioning than to free-form text variation, suggesting that the text-trajectory mapping remains undertrained.
+
+Future work includes full HumanML3D coverage via additional AMASS subsets, LLM prompt normalisation at inference to bridge the training-inference text style gap, camera-relative-position conditioning, and 3D visualisation with oriented human meshes.
+
+% ============================================================
+\section{Conclusion}
+
+We presented Text-to-Shot, a system for joint person-camera trajectory generation from text using Conditional Flow Matching. Through systematic data integration from three complementary sources and careful representation design, we demonstrated controllable generation across multiple camera motion types. Our analysis of failure modes provides practical guidance for applying flow-based generative models to mixed Euclidean-angular trajectory data.
+
+% ============================================================
+{\small
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{courant2024et}
+R.~Courant, N.~Dufour, X.~Wang, M.~Christie, and V.~Kalogeiton.
+\newblock E.T.\ the Exceptional Trajectories: Text-to-Camera-Trajectory Generation with Character Awareness.
+\newblock In \emph{ECCV}, 2024.
+
+\bibitem{lipman2023flow}
+Y.~Lipman, R.~T.~Q.~Chen, H.~Ben-Hamu, M.~Nickel, and M.~Le.
+\newblock Flow Matching for Generative Modeling.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem{mahmood2019amass}
+N.~Mahmood, N.~Ghorbani, N.~F.~Troje, G.~Pons-Moll, and M.~J.~Black.
+\newblock AMASS: Archive of Motion Capture as Surface Shapes.
+\newblock In \emph{ICCV}, 2019.
+
+\bibitem{guo2022humanml3d}
+C.~Guo, S.~Zou, X.~Zuo, S.~Wang, T.~Ji, X.~Li, and L.~Cheng.
+\newblock Generating Diverse and Natural 3D Human Motions from Text.
+\newblock In \emph{CVPR}, 2022.
+
+\bibitem{tevet2023human}
+G.~Tevet, S.~Raab, B.~Gordon, Y.~Shafir, D.~Cohen-Or, and A.~H.~Bermano.
+\newblock Human Motion Diffusion Model.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem{ho2020ddpm}
+J.~Ho, A.~Jain, and P.~Abbeel.
+\newblock Denoising Diffusion Probabilistic Models.
+\newblock In \emph{NeurIPS}, 2020.
+
+\bibitem{ho2022cfg}
+J.~Ho and T.~Salimans.
+\newblock Classifier-Free Diffusion Guidance.
+\newblock In \emph{NeurIPS Workshops}, 2021.
+
+\bibitem{radford2021clip}
+A.~Radford et~al.
+\newblock Learning Transferable Visual Models from Natural Language Supervision.
+\newblock In \emph{ICML}, 2021.
+
+\bibitem{perez2018film}
+E.~Perez, F.~Strub, H.~de~Vries, V.~Dumoulin, and A.~Bengio.
+\newblock FiLM: Visual Reasoning with a General Conditioning Layer.
+\newblock In \emph{AAAI}, 2018.
+
+\bibitem{ye2023slahmr}
+V.~Ye, G.~Pavlakos, J.~Malik, and A.~Kanazawa.
+\newblock Decoupling Human and Camera Motion from Videos in the Wild.
+\newblock In \emph{CVPR}, 2023.
+
+\bibitem{zhang2022motiondiffuse}
+M.~Zhang, Z.~Cai, L.~Pan, F.~Hong, X.~Guo, L.~Yang, and Z.~Liu.
+\newblock MotionDiffuse: Text-Driven Human Motion Generation with Diffusion Model.
+\newblock \emph{arXiv:2208.15001}, 2022.
+
+\bibitem{director3d2024}
+X.~Li et~al.
+\newblock Director3D: Real-world Camera Trajectory and 3D Scene Generation from Text.
+\newblock In \emph{NeurIPS}, 2024.
+
+\bibitem{gendop2025}
+Y.~Zhang et~al.
+\newblock GenDoP: Auto-regressive Camera Trajectory Generation as a Director of Photography.
+\newblock In \emph{ICCV}, 2025.
+
+\bibitem{pulpmotion2025}
+Anonymous.
+\newblock PULP MOTION: Framing-Aware Multimodal Camera and Human Motion Generation.
+\newblock \emph{arXiv:2510.05097}, 2025.
+
+\bibitem{float2025}
+J.~Ki et~al.
+\newblock FLOAT: Generative Motion Latent Flow Matching for Audio-driven Talking Portrait.
+\newblock In \emph{ICCV}, 2025.
+
+\end{thebibliography}
+}
+
+\end{document}

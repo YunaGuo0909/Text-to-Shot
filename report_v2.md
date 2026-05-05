@@ -93,16 +93,45 @@ To address the label noise and class imbalance in E.T., the AMASS motion capture
 
 This approach produces labels that are 100% accurate by construction — unlike the keyword-matched E.T. labels — and ensures perfect class balance (11.1% per motion type).
 
-After processing 5,401 AMASS files (CMU, ACCAD, BMLrub subsets), 268,317 samples were generated. Merging with E.T. yielded a final training set of 326,870 samples.
+After processing 5,401 AMASS files (CMU, ACCAD, BMLrub subsets), 268,317 samples were generated. In subsequent iterations, additional AMASS subsets (KIT, Eyes_Japan_Dataset) were added, increasing the AMASS contribution to 517,797 samples from 10,383 source files. Caption generation was also enriched with shot type prefixes (e.g., "Close Up. The camera pushes in while the character walks forward.") and person turning descriptions inferred from yaw changes exceeding 45 degrees (e.g., "moves forward while turning left").
 
-**[INSERT: Class distribution comparison - E.T. only vs merged dataset (stacked bar or side-by-side)]**
+### 4.4 HumanML3D Integration
 
-| Motion Type | E.T. only | Merged |
-|-------------|-----------|--------|
-| static | 66.7% | 21.9% |
-| dolly-out | 0.4% | 9.0% |
-| orbit | 0.0% | 8.9% |
-| dolly-in | 10.6% | 11.0% |
+The AMASS-generated captions, while structurally accurate, are produced from templates and lack the lexical diversity of human language. To address this, the HumanML3D dataset (Guo et al., 2022) was integrated as a third data source. HumanML3D provides 14,616 motions with 44,970 human-written text descriptions averaging three descriptions per motion, covering locomotion, gestures, and complex multi-phase actions.
+
+HumanML3D motions are derived from AMASS but stored in a processed format that requires re-extraction from the original AMASS source files. Using the dataset's `index.csv`, which maps each motion ID to an AMASS source path and frame range, a matching script (`scripts/prepare_humanml3d.py`) was implemented. This script resolves HumanML3D source paths (e.g., `./pose_data/CMU/80/80_63_poses.npy`) to actual AMASS files on disk (e.g., `/transfer/amassdata/CMU/CMU/80/80_63_poses.npz`), handling naming convention differences (double directory nesting, `.npy` to `.npz` extension, `_poses` to `_stageii` suffix variants).
+
+With five AMASS subsets available locally (CMU, ACCAD, BMLrub, KIT, Eyes_Japan_Dataset), 9,303 of 14,616 HumanML3D motions were successfully matched (63.6%). The remaining 36.4% reference AMASS subsets not downloaded (BMLmovi, HDM05, SSM_synced) or the non-AMASS HumanAct12 subset. Each matched motion was paired with all 9 camera motion types, producing 83,700 samples with human-written captions.
+
+The final merged training set for v8 contains 660,050 samples from three sources:
+
+| Source | Samples | Caption Quality | Person Data |
+|--------|---------|----------------|-------------|
+| E.T. | 64,948 | Film captions (moderate) | SLAHMR-estimated |
+| AMASS | 517,797 | Template-generated | MoCap ground truth |
+| HumanML3D | 83,700 | **Human-written** | MoCap ground truth |
+| **Total** | **666,445** | | |
+
+**[INSERT: Class distribution comparison across E.T. only, merged v5 (326k), merged v8 (666k)]**
+
+| Motion Type | E.T. only | Merged v5 | Merged v8 |
+|-------------|-----------|-----------|-----------|
+| static | 66.7% | 21.9% | 16.5% |
+| dolly-out | 0.4% | 9.0% | 10.1% |
+| orbit | 0.0% | 8.9% | 10.0% |
+| dolly-in | 10.6% | 11.0% | 11.0% |
+
+### 4.5 Person Trajectory Representation
+
+The person trajectory representation evolved through three stages during development:
+
+**v1-v6 (position only):** $(p_x, p_y, p_z)$ per frame, 3 dimensions. The root translation is extracted from the SMPL-H `transl` field for E.T. data and from the `trans` or `root_orient` fields for AMASS data. This captures where the person is but not which direction they face.
+
+**v7 (raw yaw, failed):** $(p_x, p_y, p_z, \theta)$ per frame, 4 dimensions. The yaw angle $\theta$ was extracted from the SMPL-H `global_orient` rotation matrix via $\theta = \text{atan2}(R_{02}, R_{22})$ and from AMASS axis-angle root orientation via Rodrigues conversion. This model suffered complete mode collapse due to the angular wraparound discontinuity at $\pm\pi$ (see Section 5.6).
+
+**v8 (sin/cos yaw):** $(p_x, p_y, p_z, \sin\theta, \cos\theta)$ per frame, 5 dimensions. The same yaw angle is encoded as its sine and cosine components, removing the discontinuity. This is the standard approach in the motion generation literature. The total joint vector dimension is $48 \times (5 + 6) = 528$.
+
+For samples without orientation data (E.T. look-at proxy fallback), the yaw columns are set to $(\sin 0, \cos 0) = (0, 1)$, representing a default forward-facing direction.
 
 ---
 
@@ -217,12 +246,18 @@ All models were trained on an NVIDIA RTX 4080 (16 GB). The Adam-W optimiser was 
 
 **[INSERT: Training loss curves comparing FM v2 (E.T. 58k) and FM v5 (merged 326k)]**
 
-| Model | Data | Val Loss | Train/Val Gap |
-|-------|------|----------|---------------|
-| FM v2 | E.T. 58k | 0.822 | 2.8× |
-| FM v5 | Merged 326k | **0.388** | **1.8×** |
+| Model | Data | person_dim | Val Loss | Train/Val Gap | Notes |
+|-------|------|-----------|----------|---------------|-------|
+| DDPM run 1 | E.T. 58k | 3 | 0.471 | 5.3× | Mode collapse |
+| DDPM run 2 | E.T. 58k | 3 | 0.657 | 9.7× | Balanced sampling, still collapse |
+| FM v1 | E.T. 58k | 3 | noise | — | Timestep direction bug |
+| FM v2 | E.T. 58k | 3 | 0.822 | 2.8× | First working FM |
+| FM v5 | Merged 326k | 3 | 0.388 | 1.8× | Best position-only model |
+| FM v6 | Merged 326k | 3 | 0.466 | 1.9× | Smooth loss added |
+| FM v7 | Merged 660k | **4 (raw yaw)** | 0.466 | 1.9× | **Mode collapse from yaw wraparound** |
+| FM v8 | Merged 660k | **5 (sin/cos)** | TBD | TBD | HumanML3D captions + sin/cos fix |
 
-The addition of AMASS data reduced val loss by 53% and halved the overfitting gap. The improvement is attributable to both increased data volume and improved label quality: AMASS-derived dolly-in samples have 100% label accuracy, compared to 57% in E.T.
+The addition of AMASS data reduced val loss by 53% and halved the overfitting gap. The improvement is attributable to both increased data volume and improved label quality: AMASS-derived dolly-in samples have 100% label accuracy, compared to 57% in E.T. The v7 regression demonstrates that representation choices for individual dimensions can override the benefit of additional data, underscoring the importance of matching data topology to model assumptions (Section 5.6).
 
 ### 6.3 Qualitative Evaluation by Motion Type
 
@@ -256,12 +291,19 @@ All three produce decreasing distance curves, suggesting the motion type embeddi
 
 ### 6.5 Post-Processing Analysis
 
-Raw model outputs contain high-frequency oscillations in the person trajectory (median amplitude 0.05 units, period 6-10 frames) caused by accumulated Euler integration error over 50 ODE steps. Three post-processing stages were applied:
+Raw model outputs contain high-frequency oscillations in the person trajectory (median amplitude 0.05 units, period 6-10 frames) caused by accumulated Euler integration error over 50 ODE steps. Four post-processing stages are applied sequentially:
 
-1. **Savitzky-Golay smoothing**: person trajectory window 31, camera position window 21, camera angle window 31.
-2. **Static dimension freezing**: any trajectory dimension with range < 0.05 units is replaced by its mean, eliminating residual drift in nominally static shots.
+1. **Savitzky-Golay smoothing**: person trajectory window 31, camera position window 21, camera angle window 31. Removes high-frequency jitter while preserving the overall trajectory shape.
+
+2. **Person trajectory regularisation**: a greedy segmentation algorithm detects piecewise-linear segments in the person position (dimensions 0-2). Each segment is straightened by fitting a line between its start and end points; dimensions with range below 0.08m within a segment are locked to their mean. Segments are connected by cubic spline interpolation, producing smooth transitions at turning points. If the total displacement is below 0.08m, the person is frozen as stationary. This enforces physically plausible motion: a person described as "walking forward" produces a straight-line trajectory, while "walks right then turns left" produces two connected line segments with a smooth turn.
+
+3. **Sin/cos yaw smoothing**: the sin and cos yaw components are smoothed independently with Savitzky-Golay filtering, then renormalised to the unit circle ($\sin^2 + \cos^2 = 1$). Unlike angular unwrapping, this approach is numerically stable and introduces no phase ambiguity.
+
+4. **Static dimension freezing**: any trajectory dimension with range < 0.05 units is replaced by its mean, eliminating residual drift in nominally static shots.
 
 **[INSERT: Before/after smoothing comparison on person trajectory (showing oscillation removal)]**
+
+**[INSERT: Example of person trajectory regularisation - raw zigzag vs straightened piecewise-linear path]**
 
 ---
 
@@ -273,7 +315,9 @@ Raw model outputs contain high-frequency oscillations in the person trajectory (
 
 **AMASS augmentation was the single largest improvement.** The 53% reduction in validation loss came primarily from replacing noisy E.T. labels with AMASS samples whose camera behaviour was generated by construction. This addresses a fundamental limitation of the E.T. dataset for this task: camera motion labels derived from natural language are inherently imprecise.
 
-**Systematic data pipeline debugging.** The project uncovered four distinct data pipeline failures (zero person trajectories, silent exception swallowing, caption priority inversion, numerical outliers) that collectively produced a model that appeared to train correctly but generated meaningless outputs. The debugging methodology — normalisation statistics as an early sanity check, targeted diagnostic scripts, exception handler removal — proved more effective than adjusting model hyperparameters.
+**Systematic data pipeline debugging.** The project uncovered six distinct data pipeline failures (zero person trajectories, silent exception swallowing, caption priority inversion, numerical outliers, timestep direction reversal, angular wraparound) that collectively produced models that appeared to train correctly but generated meaningless outputs. The debugging methodology — normalisation statistics as an early sanity check, targeted diagnostic scripts, exception handler removal, and mid-training generation tests — proved more effective than adjusting model hyperparameters.
+
+**Multi-source data integration.** Combining E.T. (real film data with noisy labels), AMASS (motion capture with synthetic but accurate labels), and HumanML3D (motion capture with human-written captions) proved complementary. Each source addresses a different weakness: E.T. provides naturalistic camera work, AMASS provides clean labels and class balance, and HumanML3D provides lexically diverse text descriptions.
 
 ### What Did Not Work Well
 
@@ -307,3 +351,5 @@ Raw model outputs contain high-frequency oscillations in the person trajectory (
 - Song, J., Meng, C., & Ermon, S. (2021). Denoising Diffusion Implicit Models. *ICLR 2021*.
 - Tevet, G., Raab, S., Gordon, B., Shafir, Y., Cohen-Or, D., & Bermano, A. H. (2023). Human Motion Diffusion Model. *ICLR 2023*.
 - Ye, V., Pavlakos, G., Malik, J., & Kanazawa, A. (2023). Decoupling Human and Camera Motion from Videos in the Wild. *CVPR 2023*.
+- Guo, C., Zou, S., Zuo, X., Wang, S., Ji, T., Li, X., & Cheng, L. (2022). Generating Diverse and Natural 3D Human Motions from Text. *CVPR 2022*.
+- Zhang, M., Cai, Z., Pan, L., Hong, F., Guo, X., Yang, L., & Liu, Z. (2022). MotionDiffuse: Text-Driven Human Motion Generation with Diffusion Model. *arXiv preprint arXiv:2208.15001*.
