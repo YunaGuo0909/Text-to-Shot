@@ -1,0 +1,69 @@
+# Flow Matching v9: person_dim=3 (no yaw) + 660k data + normalization
+
+model:
+  camera_dim: 6
+  person_dim: 3
+  hidden_dim: 256
+  num_layers: 6
+  num_heads: 4
+  dropout: 0.2
+
+flow_matching:
+  num_steps: 50
+
+text_encoder:
+  model_name: "openai/clip-vit-base-patch32"
+  max_length: 77
+  freeze: true
+
+shot_types:
+  categories:
+    - "close-up"
+    - "medium-shot"
+    - "wide-shot"
+    - "over-the-shoulder"
+    - "two-shot"
+  embedding_dim: 64
+
+trajectory:
+  default_num_frames: 48
+  motion_types:
+    - "static"
+    - "dolly-in"
+    - "dolly-out"
+    - "pan-left"
+    - "pan-right"
+    - "crane-up"
+    - "crane-down"
+    - "track"
+    - "orbit"
+  motion_type_dim: 64
+
+training:
+  batch_size: 64
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  num_epochs: 250
+  lr_scheduler: cosine
+  warmup_epochs: 10
+  gradient_clip: 1.0
+  save_interval: 25
+  eval_interval: 10
+  cfg_dropout_prob: 0.25
+  aux_loss_weight: 0.0
+  smooth_loss_weight: 0.08
+  lookat_loss_weight: 0.0
+  augmentation: true
+
+data:
+  data_root: "/transfer/merged-v8"
+  train_index_file: "train_index.json"
+  test_index_file: "test_index.json"
+  norm_stats_path: "/transfer/merged-v8/norm_stats_v9.json"
+  num_workers: 4
+  pin_memory: true
+
+paths:
+  checkpoint_dir: "/transfer/fm-v9-checkpoints"
+  output_dir: "/transfer/fm-v9-outputs"
+  log_dir: "/transfer/fm-v9-logs"

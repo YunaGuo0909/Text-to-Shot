@@ -4,8 +4,10 @@ import os
 import numpy as np
 from tqdm import tqdm
 
+import sys
+
 DATA_ROOT = '/transfer/merged-v8'
-PERSON_DIM = 5
+PERSON_DIM = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 CAMERA_DIM = 6
 NUM_FRAMES = 48
 
@@ -51,7 +53,8 @@ mean = all_y.mean(axis=0)
 std = all_y.std(axis=0)
 std[std < 1e-6] = 1.0  # avoid div by zero
 
-out_path = os.path.join(DATA_ROOT, 'norm_stats.json')
+suffix = f'_v9' if PERSON_DIM == 3 else ''
+out_path = os.path.join(DATA_ROOT, f'norm_stats{suffix}.json')
 with open(out_path, 'w') as f:
     json.dump({
         'mean': mean.tolist(),

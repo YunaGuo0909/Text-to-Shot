@@ -152,6 +152,9 @@ class JointTrajectoryDataset(Dataset):
                         if try_dim > 0 and loaded_total % try_dim == 0:
                             traj = traj.reshape(-1, try_dim)
                             break
+                # Truncate columns if loaded has more dims than expected
+                if traj.ndim == 2 and traj.shape[1] > dim:
+                    traj = traj[:, :dim]
                 # Pad columns if loaded has fewer dims than expected
                 if traj.ndim == 2 and traj.shape[1] < dim:
                     if is_person and traj.shape[1] == 3 and dim == 5:
