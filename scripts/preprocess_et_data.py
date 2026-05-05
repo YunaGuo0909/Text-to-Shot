@@ -193,7 +193,8 @@ def resample_trajectory(trajectory: np.ndarray, target_frames: int) -> np.ndarra
     return resampled
 
 
-def classify_camera_motion(caption: str) -> str:
+def classify_camera_motion_from_caption(caption: str) -> str:
+    """Legacy caption-based classification (kept as fallback/reference)."""
     text = caption.lower()
     if 'static' in text or 'stationary' in text or 'remains still' in text:
         return 'static'
@@ -213,6 +214,77 @@ def classify_camera_motion(caption: str) -> str:
         return 'track'
     if 'zoom' in text:
         return 'dolly-in' if 'in' in text else 'dolly-out'
+    return 'static'
+
+
+def classify_camera_motion(camera_traj: np.ndarray, person_traj: np.ndarray) -> str:
+    """
+    Classify camera motion type from actual trajectory features.
+
+    Uses camera-person distance change, azimuth change, elevation change,
+    and camera displacement to determine motion type.
+    """
+    T = camera_traj.shape[0]
+    cam_pos = camera_traj[:, :3]
+    person_pos = person_traj[:, :3] if person_traj.shape[1] > 3 else person_traj
+
+    # Camera-person distance
+    distances = np.linalg.norm(cam_pos - person_pos, axis=1)
+    dist_start = distances[:T // 4].mean()
+    dist_end = distances[-T // 4:].mean()
+    dist_change = dist_end - dist_start
+
+    # Camera azimuth change
+    azimuth = camera_traj[:, 3]
+    az_change = azimuth[-1] - azimuth[0]
+    # Unwrap azimuth to handle wraparound
+    az_change = (az_change + np.pi) % (2 * np.pi) - np.pi
+
+    # Camera Y change
+    cam_y_change = cam_pos[-1, 1] - cam_pos[0, 1]
+
+    # Camera position variance (static check)
+    cam_pos_var = np.var(cam_pos, axis=0).sum()
+
+    # Camera XZ displacement
+    cam_xz_disp = np.linalg.norm(cam_pos[-1, [0, 2]] - cam_pos[0, [0, 2]])
+
+    # Person XZ displacement
+    person_xz_disp = np.linalg.norm(person_pos[-1, [0, 2]] - person_pos[0, [0, 2]])
+
+    # Distance stability (for track: distance should stay roughly constant)
+    dist_std = np.std(distances)
+
+    # Classify by strongest signal
+    # Static: very little camera movement
+    if cam_pos_var < 0.05:
+        return 'static'
+
+    # Orbit: large azimuth change with roughly constant distance
+    if abs(az_change) > np.radians(30) and dist_std < 0.5:
+        return 'orbit'
+
+    # Dolly in/out: significant distance change
+    if abs(dist_change) > 0.5:
+        return 'dolly-in' if dist_change < 0 else 'dolly-out'
+
+    # Crane up/down: significant vertical change
+    if abs(cam_y_change) > 0.3:
+        return 'crane-up' if cam_y_change > 0 else 'crane-down'
+
+    # Track: camera moves with person, distance stable
+    if cam_xz_disp > 0.3 and person_xz_disp > 0.3 and dist_std < 0.5:
+        return 'track'
+
+    # Pan: azimuth changes but camera doesn't move much
+    if abs(az_change) > np.radians(10) and cam_xz_disp < 0.3:
+        return 'pan-left' if az_change < 0 else 'pan-right'
+
+    # Weaker dolly
+    if abs(dist_change) > 0.2:
+        return 'dolly-in' if dist_change < 0 else 'dolly-out'
+
+    # Default to static
     return 'static'
 
 
@@ -326,6 +398,15 @@ def main():
                 person_traj = None
 
         if person_traj is not None:
+            # Skip high-jerk person trajectories (SLAHMR tracking noise)
+            pos = person_traj[:, :3] if person_traj.shape[1] > 3 else person_traj
+            if pos.shape[0] >= 4:
+                jerk = np.diff(np.diff(np.diff(pos, axis=0), axis=0), axis=0)
+                max_jerk = np.max(np.linalg.norm(jerk, axis=1))
+                if max_jerk > 1.0:
+                    person_traj = None
+
+        if person_traj is not None:
             person_traj = resample_trajectory(person_traj, args.num_frames)
             # Pad to (T, 5) if only (T, 3) was returned (no orientation)
             if person_traj.shape[1] == 3:
@@ -376,7 +457,7 @@ def main():
 
         # Prefer full caption (describes both character + camera) for joint model
         text = caption_full if caption_full else caption_cam
-        camera_motion = classify_camera_motion(text)
+        camera_motion = classify_camera_motion(camera_traj, person_traj)
         shot_type = infer_shot_type(caption_full)
         motion_counts[camera_motion] = motion_counts.get(camera_motion, 0) + 1
 

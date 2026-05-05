@@ -227,8 +227,8 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
         num_frames: number of frames (should match person_traj.shape[0]).
 
     Returns:
-        camera_traj: (T, 6) camera trajectory (tx, ty, tz, azimuth, elevation, roll).
-        shot_type: inferred shot type string.
+        (camera_traj, shot_type) or (None, None) if motion type is
+        incompatible with the person trajectory (e.g. track with no movement).
     """
     T = num_frames
     # Use only position dims (first 3) for camera generation
@@ -239,6 +239,11 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
     assert person_pos.shape == (T, 3), f"Expected ({T}, 3), got {person_pos.shape}"
     # Use person_pos (xyz only) throughout this function
     person_traj = person_pos
+
+    # Track requires person to actually move in XZ plane
+    person_xz_disp = np.linalg.norm(person_traj[-1, [0, 2]] - person_traj[0, [0, 2]])
+    if motion_type == 'track' and person_xz_disp < 0.3:
+        return None, None
 
     centroid = person_traj.mean(axis=0)
     noise_sigma = 0.01
@@ -714,12 +719,13 @@ def main():
             for motion_type in ALL_MOTION_TYPES:
                 sample_id = f"amass_{base_name}_c{chunk_idx:04d}_{motion_type}"
 
-                camera_traj, shot_type = generate_camera_for_person(
+                result = generate_camera_for_person(
                     person_chunk, motion_type, args.num_frames
                 )
+                camera_traj, shot_type = result
 
-                # Validate
-                if not is_valid_trajectory(camera_traj):
+                # Skip if motion type incompatible or invalid
+                if camera_traj is None or not is_valid_trajectory(camera_traj):
                     continue
 
                 # Save .npy files

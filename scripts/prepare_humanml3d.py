@@ -283,7 +283,7 @@ def main():
             camera_traj, shot_type = generate_camera_for_person(
                 person_traj, motion_type, args.num_frames
             )
-            if not is_valid_trajectory(camera_traj):
+            if camera_traj is None or not is_valid_trajectory(camera_traj):
                 continue
 
             np.save(os.path.join(cam_out, f'{sample_id}.npy'), camera_traj)
