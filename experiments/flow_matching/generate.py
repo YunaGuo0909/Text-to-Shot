@@ -285,6 +285,12 @@ def generate(args):
             camera_traj = freeze_static_dims(camera_traj, threshold=0.05)
             print(f"  Smoothing + regularize + freeze applied")
 
+        if args.enforce_constraints:
+            from experiments.flow_matching.postprocess_constraints import apply_constraints
+            person_traj, camera_traj = apply_constraints(
+                person_traj, camera_traj, args.motion)
+            print(f"  Hard constraints applied for '{args.motion}'")
+
         tag = f"{args.motion}_{args.shot_type}_{time.strftime('%m%d_%H%M%S')}"
         np.save(os.path.join(output_dir, f'fm_person_{tag}.npy'), person_traj)
         np.save(os.path.join(output_dir, f'fm_camera_{tag}.npy'), camera_traj)
@@ -314,7 +320,8 @@ def main():
     parser.add_argument('--output-dir', type=str, default=None,
                         help='Override output directory (default: from config)')
     parser.add_argument('--no-smooth', action='store_true')
-    parser.add_argument('--smooth-window', type=int, default=7)
+    parser.add_argument('--enforce-constraints', action='store_true',
+                        help='Apply motion-type-aware hard constraints (optional postprocess)')
     args = parser.parse_args()
     generate(args)
 

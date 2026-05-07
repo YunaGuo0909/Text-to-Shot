@@ -67,3 +67,11 @@ desktop.ini
 paper_text.txt
 extract_pdf.py
 *.pdf
+
+# Don't push these
+linuxoutput/
+report_v1.md
+report_v2.md
+PROJECT_PLAN.md
+TECHNICAL_DESIGN.md
+.claude/

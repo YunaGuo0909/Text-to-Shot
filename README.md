@@ -1,71 +1,29 @@
-# Text-to-Shot (Script-to-Camera)
+# Text-to-Shot
 
-Joint person-camera trajectory generation from text.
+文本到联合人物-相机轨迹生成，当前仅维护 **Flow Matching** 一条主线。
 
-This repository contains three active pipelines:
-
-1. **Baseline joint DDPM** (`train.py`, `generate.py`, `evaluate.py`)
-2. **Flow Matching experiment** (`experiments/flow_matching`)
-3. **Two-stage experiment** (`experiments/two_stage`)
-
-The project is data-centric and includes scripts to prepare E.T., AMASS, HumanML3D, and DanceCamera3D into one unified training format.
+> 说明：历史方案、实验心路和对比分析统一放在 `report_v2.md`，README 只保留当前可用流程。
 
 ---
 
-## Current trajectory format
+## 任务定义
 
-- **Person trajectory**: `(T, 5)` = `[px, py, pz, sin_yaw, cos_yaw]`
-- **Camera trajectory**: `(T, 6)` = `[tx, ty, tz, azimuth, elevation, roll]`
-- **Joint vector**: `[person_flat, camera_flat]` with `T=48` by default
+输入一段文本，生成一段长度为 `T=48` 的联合轨迹：
 
-> Note: old `(T, 3)` person files are still supported and padded to `(T, 5)` in `src/data/dataset.py`.
-
----
-
-## Repository layout
-
-```text
-Text-to-Shot/
-├── configs/
-│   └── default.yaml
-├── src/
-│   ├── data/
-│   │   └── dataset.py
-│   ├── models/
-│   │   ├── denoiser.py
-│   │   ├── diffusion.py
-│   │   ├── text_encoder.py
-│   │   └── film.py
-│   └── utils/
-├── scripts/
-│   ├── download_et_data.py
-│   ├── preprocess_et_data.py
-│   ├── filter_et_single_person.py
-│   ├── compute_norm_stats.py
-│   ├── prepare_amass.py
-│   ├── prepare_humanml3d.py
-│   ├── prepare_dancecamera3d.py
-│   └── merge_datasets.py
-├── experiments/
-│   ├── flow_matching/
-│   └── two_stage/
-├── train.py
-├── generate.py
-├── evaluate.py
-├── Text-to-Shot_Pipeline.ipynb
-└── report_v2.md
-```
+- 人物轨迹：`(T, Dp)`，当前训练配置常用 `Dp=3`（`px, py, pz`）
+- 相机轨迹：`(T, 6)`，`[tx, ty, tz, azimuth, elevation, roll]`
+- 联合向量：`[person_flat, camera_flat]`
 
 ---
 
-## Installation
+## 安装
 
-Requirements:
+要求：
 
 - Python >= 3.10
-- CUDA GPU recommended for training
+- 推荐 CUDA GPU（训练）
 
-Install:
+安装：
 
 ```bash
 pip install -e .
@@ -73,235 +31,93 @@ pip install -e .
 
 ---
 
-## Quick start (baseline E.T. pipeline)
+## 快速开始
 
-All default configs/scripts assume data under `/transfer`.
+默认示例使用 `experiments/flow_matching/configs/v9.yaml`。
 
-### 1) Download E.T.
+### 1) 准备数据（如果已有可跳过）
 
-```bash
-python scripts/download_et_data.py
-```
+将训练数据整理为：
 
-Default target: `/transfer/et-data` (skips download if core folders already exist).
+- `<data_root>/train_index.json`
+- `<data_root>/test_index.json`
+- 索引中指向的人物/相机 `.npy` 轨迹文件
 
-### 2) Preprocess E.T. into training format
+如果需要从 E.T. / AMASS / HumanML3D 重建数据，可用 `scripts/` 下的数据脚本。
 
-```bash
-python scripts/preprocess_et_data.py \
-  --et-root /transfer/et-data \
-  --output-root /transfer/stc-data \
-  --num-frames 48
-```
-
-Output:
-
-- `/transfer/stc-data/camera_trajectories/*.npy`
-- `/transfer/stc-data/person_trajectories/*.npy`
-- `/transfer/stc-data/train_index.json`
-- `/transfer/stc-data/test_index.json`
-
-### 3) (Optional) filter to single-person subset
-
-```bash
-python scripts/filter_et_single_person.py --data-root /transfer/stc-data
-```
-
-Creates:
-
-- `train_index_single_person.json`
-- `test_index_single_person.json`
-
-### 4) Compute normalization stats (recommended)
+### 2) 计算归一化统计（推荐）
 
 ```bash
 python scripts/compute_norm_stats.py \
-  --data-root /transfer/stc-data \
-  --index-file train_index.json
+  --data-root /transfer/merged-v9b \
+  --index-file train_index.json \
+  --person-dim 3 \
+  --camera-dim 6
 ```
 
-Writes `/transfer/stc-data/norm_stats.json`.
+默认输出：`/transfer/merged-v9b/norm_stats.json`
 
----
-
-## Optional data augmentation pipeline
-
-### Prepare AMASS synthetic camera pairs
-
-```bash
-python scripts/prepare_amass.py \
-  --amass-root /transfer/amass \
-  --output-root /transfer/amass-stc-data
-```
-
-### Prepare HumanML3D-derived pairs
-
-```bash
-python scripts/prepare_humanml3d.py \
-  --amass-root /transfer/amassdata \
-  --humanml3d-root /transfer/HumanML3D \
-  --output-root /transfer/humanml3d-stc-data-v7
-```
-
-### Prepare DanceCamera3D pairs
-
-```bash
-python scripts/prepare_dancecamera3d.py \
-  --data-root /transfer/dancecamera3d \
-  --output-root /transfer/dance-stc-data
-```
-
-### Merge multiple prepared datasets
-
-```bash
-python scripts/merge_datasets.py \
-  --sources /transfer/stc-data /transfer/amass-stc-data /transfer/dance-stc-data \
-  --output-root /transfer/merged-stc-data \
-  --compute-norm-stats
-```
-
----
-
-## Training
-
-### 1) Baseline joint DDPM
-
-```bash
-# Full set
-python train.py --config configs/default.yaml --device cuda
-
-# Single-person subset
-python train.py --config configs/default.yaml --device cuda --single-person
-
-# Resume
-python train.py --config configs/default.yaml --device cuda \
-  --resume /transfer/stc-checkpoints/stc_epoch50.pth
-```
-
-### 2) Flow Matching experiment
+### 3) 训练
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/train.py \
-  --config experiments/flow_matching/configs/default.yaml \
+  --config experiments/flow_matching/configs/v9.yaml \
   --device cuda
 ```
 
-### 3) Two-stage experiment
-
-```bash
-# Stage 1: text -> person
-PYTHONPATH=. python experiments/two_stage/train_stage1.py \
-  --config experiments/two_stage/configs/stage1.yaml --device cuda
-
-# Stage 2: text + person -> camera
-PYTHONPATH=. python experiments/two_stage/train_stage2.py \
-  --config experiments/two_stage/configs/stage2.yaml --device cuda
-```
-
----
-
-## Inference
-
-### Baseline DDPM
-
-```bash
-python generate.py \
-  --checkpoint /transfer/stc-checkpoints/stc_final.pth \
-  --text "A person walks toward camera" \
-  --motion dolly-in \
-  --shot-type medium-shot \
-  --guidance-scale 3.0 \
-  --ddim --ddim-steps 50
-```
-
-### Flow Matching
+### 4) 推理
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/generate.py \
-  --checkpoint /transfer/fm-v8-checkpoints/fm_final.pth \
+  --checkpoint /transfer/fm-v9b-checkpoints/fm_final.pth \
   --text "A person walks toward camera" \
   --motion dolly-in \
+  --shot-type medium-shot \
   --guidance-scale 3.0
 ```
 
-### Two-stage
+可选：开启硬约束后处理
 
 ```bash
-PYTHONPATH=. python experiments/two_stage/generate.py \
-  --stage1-ckpt /transfer/two-stage-checkpoints/stage1/stage1_final.pth \
-  --stage2-ckpt /transfer/two-stage-checkpoints/stage2/stage2_final.pth \
-  --text "A person walks toward camera" \
-  --motion dolly-in \
-  --ddim --ddim-steps 50
+--enforce-constraints
 ```
 
-Typical outputs are saved as tagged files in the configured output directory, e.g.:
+---
 
-- `gen_person_<tag>.npy` / `fm_person_<tag>.npy`
-- `gen_camera_<tag>.npy` / `fm_camera_<tag>.npy`
-- `gen_joint_<tag>.png` / `fm_joint_<tag>.png`
+## 输出文件
+
+默认输出目录由配置文件 `paths.output_dir` 指定，典型产物：
+
+- `fm_person_<tag>.npy`
+- `fm_camera_<tag>.npy`
+- `fm_joint_<tag>.png`
 
 ---
 
-## Evaluation
+## 关键目录
 
-`evaluate.py` currently evaluates the baseline joint DDPM checkpoints:
+```text
+experiments/flow_matching/
+  configs/v9.yaml            # 当前主配置
+  train.py                   # 训练入口
+  generate.py                # 推理入口
+  postprocess_constraints.py # 可选硬约束后处理
 
-```bash
-python evaluate.py \
-  --checkpoint /transfer/stc-checkpoints/stc_final.pth \
-  --device cuda \
-  --single-person
+src/
+  data/dataset.py            # 数据加载与归一化
+  models/                    # 核心模型组件
+
+scripts/
+  compute_norm_stats.py      # 归一化统计
+  preprocess_et_data.py      # 数据预处理（按需）
+  prepare_amass.py           # 数据准备（按需）
+  prepare_humanml3d.py       # 数据准备（按需）
+  merge_datasets.py          # 数据合并（按需）
 ```
 
-Metrics include:
-
-- person/camera MSE and MAE
-- person/camera jerk
-- path length
-- camera-person distance statistics
-
-Results are saved to `evaluation_results.json` in the configured output directory.
-
 ---
 
-## Default paths in configs
+## 文档
 
-### Baseline (`configs/default.yaml`)
-
-- data root: `/transfer/stc-data`
-- checkpoints: `/transfer/stc-checkpoints`
-- outputs: `/transfer/stc-outputs`
-- logs: `/transfer/stc-logs`
-
-### Flow Matching (`experiments/flow_matching/configs/default.yaml`)
-
-- data root: `/transfer/merged-v8`
-- checkpoints: `/transfer/fm-v8-checkpoints`
-- outputs: `/transfer/fm-v8-outputs`
-- logs: `/transfer/fm-v8-logs`
-
-### Two-stage
-
-- stage1 ckpt: `/transfer/two-stage-checkpoints/stage1`
-- stage2 ckpt: `/transfer/two-stage-checkpoints/stage2`
-- outputs: `/transfer/two-stage-outputs`
-
----
-
-## Documentation and reports
-
-- Main report: `report_v2.md`
-- Previous report: `report_v1.md`
-- Notebook: `Text-to-Shot_Pipeline.ipynb`
-- Additional analysis: `docs/v7_yaw_failure_analysis.md`
-
----
-
-## References
-
-- Courant et al., E.T. the Exceptional Trajectories (ECCV 2024)
-- Ho et al., Denoising Diffusion Probabilistic Models (NeurIPS 2020)
-- Ho and Salimans, Classifier-Free Guidance (NeurIPS Workshops 2021)
-- Lipman et al., Flow Matching for Generative Modeling (ICLR 2023)
-- Radford et al., CLIP (ICML 2021)
+- 主报告：`report_v2.md`
+- 旧版报告：`report_v1.md`
