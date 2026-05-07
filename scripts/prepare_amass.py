@@ -253,72 +253,32 @@ def look_at_angles(cam_pos: np.ndarray, target: np.ndarray):
     return azimuth, elevation
 
 
-def ease_in_out(alpha: float) -> float:
-    """Smoothstep easing: slow start and end, fast middle."""
-    return 3 * alpha ** 2 - 2 * alpha ** 3
-
-
-def ease_random(alpha: float, style: str) -> float:
-    """Apply random easing style to linear alpha."""
-    if style == 'linear':
-        return alpha
-    elif style == 'ease_in':
-        return alpha ** 2
-    elif style == 'ease_out':
-        return 1 - (1 - alpha) ** 2
-    elif style == 'ease_in_out':
-        return ease_in_out(alpha)
-    return alpha
-
-
-EASING_STYLES = ['linear', 'ease_in', 'ease_out', 'ease_in_out']
-
-
-def person_speed_profile(person_traj: np.ndarray) -> np.ndarray:
-    """Compute per-frame speed profile normalized to [0, 1]."""
-    vel = np.diff(person_traj[:, :3], axis=0)
-    speeds = np.linalg.norm(vel, axis=1)
-    # Pad to match T frames
-    speeds = np.concatenate([speeds, [speeds[-1]]])
-    max_speed = speeds.max()
-    if max_speed < 1e-6:
-        return np.zeros_like(speeds)
-    return speeds / max_speed
-
-
 def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
                                num_frames: int = 48) -> tuple:
     """
     Generate a synthetic camera trajectory for a person trajectory.
 
-    Features:
-    - Random easing (linear, ease-in, ease-out, ease-in-out) for natural feel
-    - Speed-adaptive: camera dolly/orbit speed responds to person movement
-    - Combined motion support (e.g. 'dolly-in_crane-up')
-    - Always looks at person's current position (not centroid)
+    Simple, deterministic rules per motion type. Each motion type produces
+    a consistent trajectory pattern so the model learns a clean mapping.
 
     Returns:
         (camera_traj, shot_type) or (None, None) if incompatible.
     """
     T = num_frames
     if person_traj.shape[1] > 3:
-        person_pos = person_traj[:, :3].copy()
+        person_pos = person_traj[:, :3]
     else:
-        person_pos = person_traj.copy()
+        person_pos = person_traj
     assert person_pos.shape == (T, 3), f"Expected ({T}, 3), got {person_pos.shape}"
+    person_traj = person_pos
 
-    # Check track feasibility
-    person_xz_disp = np.linalg.norm(person_pos[-1, [0, 2]] - person_pos[0, [0, 2]])
-    needs_track = 'track' in motion_type
-    if needs_track and person_xz_disp < 0.3:
+    # Track requires person to actually move in XZ plane
+    person_xz_disp = np.linalg.norm(person_traj[-1, [0, 2]] - person_traj[0, [0, 2]])
+    if motion_type == 'track' and person_xz_disp < 0.3:
         return None, None
 
-    centroid = person_pos.mean(axis=0)
+    centroid = person_traj.mean(axis=0)
     noise_sigma = 0.01
-    easing = random.choice(EASING_STYLES)
-
-    # Person speed profile for speed-adaptive behavior
-    speed_profile = person_speed_profile(person_traj)
 
     shot_type = random.choice(SHOT_TYPES)
     dist_lo, dist_hi = SHOT_DISTANCE[shot_type]
@@ -327,142 +287,117 @@ def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
     init_angle = random.uniform(0, 2 * np.pi)
     cam_height_offset = random.uniform(-0.3, 0.5)
 
-    # Parse combined motion types
-    if '_' in motion_type:
-        parts = motion_type.split('_', 1)
-        primary = parts[0]
-        secondary = parts[1]
-    else:
-        primary = motion_type
-        secondary = None
+    camera_traj = np.zeros((T, 6), dtype=np.float32)
 
-    # Compute base camera positions per frame
-    cam_positions = np.zeros((T, 3), dtype=np.float32)
-    offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
-
-    if primary == 'static':
+    if motion_type == 'static':
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         cam_pos = centroid + offset_dir * base_distance
         cam_pos[1] += cam_height_offset
         for t in range(T):
-            cam_positions[t] = cam_pos
+            az, el = look_at_angles(cam_pos, person_traj[t])
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
-    elif primary == 'dolly-in':
+    elif motion_type == 'dolly-in':
         start_dist = max(base_distance, 4.0) + random.uniform(0.5, 1.5)
         end_dist = max(1.5, base_distance - 1.5)
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         for t in range(T):
             alpha = t / max(T - 1, 1)
-            alpha = ease_random(alpha, easing)
-            # Speed-adaptive: push in faster when person moves faster
-            speed_boost = 1.0 + 0.3 * speed_profile[t]
-            effective_alpha = min(1.0, alpha * speed_boost)
-            dist = start_dist + (end_dist - start_dist) * effective_alpha
-            cam_positions[t] = person_pos[t] + offset_dir * dist
-            cam_positions[t, 1] += cam_height_offset
+            dist = start_dist + (end_dist - start_dist) * alpha
+            cam_pos = person_traj[t] + offset_dir * dist
+            cam_pos[1] += cam_height_offset
+            az, el = look_at_angles(cam_pos, person_traj[t])
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
-    elif primary == 'dolly-out':
+    elif motion_type == 'dolly-out':
         start_dist = max(1.5, base_distance - 1.5)
         end_dist = max(base_distance, 4.0) + random.uniform(0.5, 1.5)
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         for t in range(T):
             alpha = t / max(T - 1, 1)
-            alpha = ease_random(alpha, easing)
-            speed_boost = 1.0 + 0.3 * speed_profile[t]
-            effective_alpha = min(1.0, alpha * speed_boost)
-            dist = start_dist + (end_dist - start_dist) * effective_alpha
-            cam_positions[t] = person_pos[t] + offset_dir * dist
-            cam_positions[t, 1] += cam_height_offset
+            dist = start_dist + (end_dist - start_dist) * alpha
+            cam_pos = person_traj[t] + offset_dir * dist
+            cam_pos[1] += cam_height_offset
+            az, el = look_at_angles(cam_pos, person_traj[t])
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
-    elif primary in ('pan-left', 'pan-right'):
+    elif motion_type in ('pan-left', 'pan-right'):
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         cam_pos = centroid + offset_dir * base_distance
         cam_pos[1] += cam_height_offset
+        pan_range = random.uniform(np.radians(30), np.radians(60))
+        if motion_type == 'pan-left':
+            pan_range = -pan_range
+        base_az, base_el = look_at_angles(cam_pos, centroid)
         for t in range(T):
-            cam_positions[t] = cam_pos
+            alpha = t / max(T - 1, 1)
+            az = base_az + pan_range * alpha
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = base_el
+            camera_traj[t, 5] = 0.0
 
-    elif primary in ('crane-up', 'crane-down'):
+    elif motion_type in ('crane-up', 'crane-down'):
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         cam_pos = centroid + offset_dir * base_distance
         cam_pos[1] += cam_height_offset
         el_range = random.uniform(np.radians(20), np.radians(40))
-        if primary == 'crane-down':
+        if motion_type == 'crane-down':
             el_range = -el_range
+        base_az, base_el = look_at_angles(cam_pos, centroid)
         for t in range(T):
             alpha = t / max(T - 1, 1)
-            alpha = ease_random(alpha, easing)
             height_delta = np.tan(el_range * alpha) * base_distance
-            cam_positions[t] = cam_pos.copy()
-            cam_positions[t, 1] += height_delta
+            cur_pos = cam_pos.copy()
+            cur_pos[1] += height_delta
+            az, el = look_at_angles(cur_pos, person_traj[t])
+            camera_traj[t, :3] = cur_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
-    elif primary == 'track':
+    elif motion_type == 'track':
+        offset_dir = np.array([np.sin(init_angle), 0.0, np.cos(init_angle)])
         for t in range(T):
-            cam_positions[t] = person_pos[t] + offset_dir * base_distance
-            cam_positions[t, 1] += cam_height_offset
+            cam_pos = person_traj[t] + offset_dir * base_distance
+            cam_pos[1] += cam_height_offset
+            az, el = look_at_angles(cam_pos, person_traj[t])
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
-    elif primary == 'orbit':
+    elif motion_type == 'orbit':
         orbit_range = random.uniform(np.radians(60), np.radians(180))
         orbit_dir = random.choice([-1, 1])
         for t in range(T):
             alpha = t / max(T - 1, 1)
-            alpha = ease_random(alpha, easing)
-            # Speed-adaptive: orbit faster when person moves
-            speed_boost = 1.0 + 0.2 * speed_profile[t]
-            angle = init_angle + orbit_dir * orbit_range * min(1.0, alpha * speed_boost)
+            angle = init_angle + orbit_dir * orbit_range * alpha
             offset = np.array([np.sin(angle), 0.0, np.cos(angle)])
-            cam_positions[t] = centroid + offset * base_distance
-            cam_positions[t, 1] += cam_height_offset
+            cam_pos = centroid + offset * base_distance
+            cam_pos[1] += cam_height_offset
+            az, el = look_at_angles(cam_pos, person_traj[t])
+            camera_traj[t, :3] = cam_pos
+            camera_traj[t, 3] = az
+            camera_traj[t, 4] = el
+            camera_traj[t, 5] = 0.0
 
     else:
         return None, None
 
-    # Apply secondary motion on top
-    if secondary == 'crane-up':
-        el_range = random.uniform(np.radians(15), np.radians(30))
-        for t in range(T):
-            alpha = ease_random(t / max(T - 1, 1), easing)
-            cam_positions[t, 1] += np.tan(el_range * alpha) * base_distance * 0.5
-
-    elif secondary == 'crane-down':
-        el_range = random.uniform(np.radians(15), np.radians(30))
-        for t in range(T):
-            alpha = ease_random(t / max(T - 1, 1), easing)
-            cam_positions[t, 1] -= np.tan(el_range * alpha) * base_distance * 0.5
-
-    elif secondary == 'dolly-in':
-        extra_push = random.uniform(0.5, 1.5)
-        for t in range(T):
-            alpha = ease_random(t / max(T - 1, 1), easing)
-            direction = person_pos[t] - cam_positions[t]
-            direction[1] = 0
-            norm = np.linalg.norm(direction) + 1e-8
-            cam_positions[t] += (direction / norm) * extra_push * alpha
-
-    elif secondary == 'pan-left':
-        pan_range = random.uniform(np.radians(15), np.radians(30))
-        # Pan is applied to orientation, not position - handled below
-
-    elif secondary == 'pan-right':
-        pan_range = random.uniform(np.radians(15), np.radians(30))
-
-    # Build final camera trajectory with look-at
-    camera_traj = np.zeros((T, 6), dtype=np.float32)
-    for t in range(T):
-        az, el = look_at_angles(cam_positions[t], person_pos[t])
-        camera_traj[t, :3] = cam_positions[t]
-        camera_traj[t, 3] = az
-        camera_traj[t, 4] = el
-        camera_traj[t, 5] = 0.0
-
-    # Apply pan override for pan-type motions (camera stays still, orientation sweeps)
-    if primary in ('pan-left', 'pan-right') or secondary in ('pan-left', 'pan-right'):
-        pan_range_val = random.uniform(np.radians(20), np.radians(50))
-        is_left = 'pan-left' in motion_type
-        if is_left:
-            pan_range_val = -pan_range_val
-        # Only override azimuth, keep computed elevation
-        base_az = camera_traj[0, 3]
-        for t in range(T):
-            alpha = ease_random(t / max(T - 1, 1), easing)
-            camera_traj[t, 3] = base_az + pan_range_val * alpha
-
-    # Add small Gaussian noise for realism
-    camera_traj += np.random.normal(0, noise_sigma, camera_traj.shape).astype(np.float32)
+    # Add small Gaussian noise only to orientation dims (3,4,5) not position
+    # Position noise would break monotonic distance guarantees for dolly
+    camera_traj[:, 3:] += np.random.normal(0, noise_sigma,
+                                            camera_traj[:, 3:].shape).astype(np.float32)
 
     return camera_traj, shot_type
 
