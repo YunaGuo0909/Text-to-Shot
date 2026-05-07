@@ -33,7 +33,9 @@ The baseline approach (DIRECTOR, Courant et al., 2024) conditions camera generat
 
 ### 3.1 Problem Formulation
 
-The model generates a joint trajectory vector $y = [\text{person\_flat}, \text{camera\_flat}]$. Camera state per frame is $(t_x, t_y, t_z, \text{azimuth}, \text{elevation}, \text{roll})$ (6 dimensions). Person state per frame is $(p_x, p_y, p_z, \sin(\text{yaw}), \cos(\text{yaw}))$ (5 dimensions), where yaw encodes the root body facing direction using a continuous sin/cos representation to avoid angular discontinuities. With 48 frames at 24 fps (2 seconds), the total joint vector dimension is $48 \times (5 + 6) = 528$.
+The model generates a joint trajectory vector $y = [\text{person\_flat}, \text{camera\_flat}]$. Camera state per frame is $(t_x, t_y, t_z, \text{azimuth}, \text{elevation}, \text{roll})$ (6 dimensions). Person state per frame is $(p_x, p_y, p_z)$ (3 dimensions), encoding root position in world coordinates. With 48 frames at 24 fps (2 seconds), the total joint vector dimension is $48 \times (3 + 6) = 432$.
+
+> **Note:** Earlier versions (v7–v8) experimented with yaw encoding (person_dim=4 and 5). These were removed in v9 as person facing direction proved unnecessary for camera-person spatial coordination and introduced training instability (see Section 5.6).
 
 ### 3.2 Architecture
 
@@ -121,6 +123,68 @@ The final merged training set for v8 contains 660,050 samples from three sources
 | orbit | 0.0% | 8.9% | 10.0% |
 | dolly-in | 10.6% | 11.0% | 11.0% |
 
+### 4.6 v9 Data Quality Overhaul
+
+A comprehensive diagnostic analysis (`scripts/diagnose_v6_issues.py`) of the merged-v8 dataset revealed several critical data quality issues that explained the underwhelming v6 output quality despite reasonable training metrics.
+
+#### 4.6.1 Diagnostic Findings
+
+**1. Track label failure across all sources.** The "track" camera motion type was incorrectly labelled in all three data sources: AMASS 42.9% accuracy, HumanML3D 25.4%, E.T. ~47%. The root cause was the synthetic camera generation logic — for "track", the camera maintains a fixed offset from the person. When the person stands still (which many MoCap clips contain), the "track" camera is identical to "static", making them indistinguishable.
+
+**2. E.T. caption-based labels were unreliable.** Motion type labels were inferred from caption keywords (e.g., "push in" → dolly-in). Verification against actual trajectory features showed:
+
+| E.T. Motion Type | Label Accuracy (v8) | Label Accuracy (v9) |
+|------------------|--------------------|--------------------|
+| static | 96.6% | 99.9% |
+| dolly-in | 22.2% | 100% |
+| dolly-out | 14.3% | 92.2% |
+| pan-left | 0.0% | — |
+| pan-right | 4.0% | — |
+| crane-up | 0.0% | 100% |
+| crane-down | 0.0% | 100% |
+| track | 49.2% | 100% |
+| orbit | — | 100% |
+| **Overall** | **86.0%** | **99.7%** |
+
+**3. 43% of E.T. person data was fake.** In merged-v8, 44,616 E.T. samples (43.2%) used "look-at proxy" person positions — estimated by projecting a point 3m in front of the camera. This creates a circular dependency where person position is derived from camera data, teaching the model an inverted causal relationship (person follows camera instead of camera following person).
+
+**4. E.T. person trajectories were 6–10× noisier** than MoCap data due to SLAHMR tracking errors (person jerk: max 8.3 vs AMASS max 0.024).
+
+**5. Normalization stats dimension mismatch.** The norm_stats.json was computed with person_dim=5 (528 total dims) but v9 required person_dim=3 (432 total dims).
+
+#### 4.6.2 Fixes Applied
+
+**Track generation fix** (`prepare_amass.py`): Added a minimum person XZ displacement threshold (0.3m). Track samples are only generated when the person actually moves, eliminating the track/static confusion. This reduced AMASS track samples from 57,533 to 16,554 (only clips with sufficient person movement), but all remaining track samples are correctly labelled.
+
+**Trajectory-based E.T. labelling** (`preprocess_et_data.py`): Replaced the caption keyword classifier with a trajectory feature classifier that analyses actual camera-person distance change (dolly-in/out), azimuth change (pan/orbit), camera Y change (crane), and camera displacement (track/static). This raised E.T. overall label accuracy from 86.0% to 99.7%.
+
+**SLAHMR jerk filtering** (`preprocess_et_data.py`): Added a per-sample jerk filter (max jerk > 1.0 → discard). This reduced E.T. person jerk max from 8.3 to 0.51, removing the most noisy SLAHMR tracking outputs.
+
+**Look-at proxy removal**: The rebuild script uses `--require-person` to only include E.T. samples with real SMPL-H person data. E.T. real person rate: 43.2% → 100%.
+
+**Camera easing** (`prepare_amass.py`): Each synthetic camera trajectory now uses a randomly selected easing curve (linear, ease-in, ease-out, ease-in-out) via smoothstep functions, replacing the previous purely linear interpolation. This introduces natural acceleration/deceleration patterns that the model can learn as a distribution, producing more cinematically realistic outputs than deterministic linear motion.
+
+**Speed-adaptive camera** (`prepare_amass.py`): Dolly-in/out and orbit camera speeds now respond to person movement speed via a per-frame speed profile. When the person moves faster, the camera pushes in or orbits faster (boost factor up to 1.3×). This encodes a person-camera dynamic correlation that pure rule scripts cannot replicate at inference time — the model learns this as an implicit relationship.
+
+#### 4.6.3 v9 Dataset Summary
+
+The rebuilt v9 dataset contains 609,451 training samples:
+
+| Source | Samples (v8) | Samples (v9) | Change | Reason |
+|--------|-------------|-------------|--------|--------|
+| E.T. | 103,169 | 56,774 | −45% | Removed look-at proxy + jerk filter |
+| AMASS | 517,797 | 476,818 | −8% | Track skipped for stationary people |
+| HumanML3D | 83,700 | 75,859 | −9% | Track skipped for stationary people |
+| **Total** | **704,666** | **609,451** | **−14%** | |
+
+Label accuracy comparison:
+
+| Source | v8 Overall | v9 Overall |
+|--------|-----------|-----------|
+| AMASS | 93.6% | **100%** |
+| HumanML3D | 91.7% | **100%** |
+| E.T. | 86.0% | **99.7%** |
+
 ### 4.5 Person Trajectory Representation
 
 The person trajectory representation evolved through three stages during development:
@@ -132,6 +196,8 @@ The person trajectory representation evolved through three stages during develop
 **v8 (sin/cos yaw):** $(p_x, p_y, p_z, \sin\theta, \cos\theta)$ per frame, 5 dimensions. The same yaw angle is encoded as its sine and cosine components, removing the discontinuity. This is the standard approach in the motion generation literature. The total joint vector dimension is $48 \times (5 + 6) = 528$.
 
 For samples without orientation data (E.T. look-at proxy fallback), the yaw columns are set to $(\sin 0, \cos 0) = (0, 1)$, representing a default forward-facing direction.
+
+**v9 (position only, final):** $(p_x, p_y, p_z)$ per frame, 3 dimensions. The yaw dimensions were removed entirely. Analysis showed that person facing direction was unnecessary for the camera-person spatial coordination task — the camera trajectory depends on where the person *is*, not which direction they face. Removing yaw simplified the model (total dim $48 \times 9 = 432$), eliminated the need for sin/cos encoding, and removed a source of training noise (many E.T. samples had unreliable yaw from SLAHMR). The v6 model (person_dim=3) had already demonstrated successful motion type differentiation without yaw.
 
 ---
 
@@ -256,6 +322,7 @@ All models were trained on an NVIDIA RTX 4080 (16 GB). The Adam-W optimiser was 
 | FM v6 | Merged 326k | 3 | 0.466 | 1.9× | Smooth loss added |
 | FM v7 | Merged 660k | **4 (raw yaw)** | 0.466 | 1.9× | **Mode collapse from yaw wraparound** |
 | FM v8 | Merged 660k | **5 (sin/cos)** | TBD | TBD | HumanML3D captions + sin/cos fix |
+| FM v9 | Merged-v9 609k | **3** | TBD | TBD | Label fix + jerk filter + easing + speed-adaptive |
 
 The addition of AMASS data reduced val loss by 53% and halved the overfitting gap. The improvement is attributable to both increased data volume and improved label quality: AMASS-derived dolly-in samples have 100% label accuracy, compared to 57% in E.T. The v7 regression demonstrates that representation choices for individual dimensions can override the benefit of additional data, underscoring the importance of matching data topology to model assumptions (Section 5.6).
 
@@ -330,11 +397,11 @@ Raw model outputs contain high-frequency oscillations in the person trajectory (
 ### Future Work
 
 1. **HumanML3D full integration**: The current training set includes 9,303 HumanML3D motions matched to locally available AMASS subsets (CMU, ACCAD, BMLrub, KIT, Eyes_Japan_Dataset). Downloading the remaining AMASS subsets (BMLmovi, HDM05, SSM_synced) would increase HumanML3D coverage from 64% to approximately 90%, adding high-quality human-written captions for over 13,000 motions.
-2. **LLM prompt normalisation**: Add a lightweight LLM rewriting layer (Gemini Flash free tier) at inference time to normalise arbitrary user input to the training caption style before CLIP encoding, reducing the train-inference text distribution gap.
-3. **Camera-relative-position conditioning**: Encode the initial camera-to-person relative position (front, behind, left, right) in the text caption during training, enabling users to specify "camera behind the person" at inference.
-4. **3D visualisation with human mesh**: Replace stick-figure/point visualisation with SMPL body meshes or bounding-box proxies, using the generated yaw to orient the person model correctly.
+2. **LLM prompt normalisation**: Add a lightweight LLM rewriting layer at inference time to normalise arbitrary user input to the training caption style before CLIP encoding, reducing the train-inference text distribution gap.
+3. **Combined motion types via inpainting**: Support composite camera motions (e.g., dolly-in + crane-up) at inference without retraining. Generate the first motion type normally, then generate the second motion type with the first few frames clamped to the end-state of the first segment. Flow matching naturally supports this by replacing the clamped frames at each ODE step.
+4. **3D visualisation with human mesh**: Replace stick-figure/point visualisation with SMPL body meshes or bounding-box proxies for more intuitive previewing.
 5. **Spatial constraint loss**: Add a differentiable camera-to-person distance loss using AMASS samples where distance ground truth is exact.
-6. **Temporal consistency loss**: Add a velocity smoothness term directly on the generated trajectories to reduce Euler integration oscillations without relying on post-processing.
+6. **Extending person representation to full-body pose**: Incorporate joint positions beyond root translation for richer motion detail, enabling the camera to respond to gestures and actions, not just locomotion.
 
 ---
 
