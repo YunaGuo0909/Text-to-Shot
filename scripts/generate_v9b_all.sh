@@ -1,7 +1,7 @@
 #!/bin/bash
 export PYTHONPATH=.
 
-CKPT="/transfer/fm-v9b-checkpoints/fm_epoch225.pth"
+CKPT="/transfer/fm-v9-checkpoints/fm_final.pth"
 OUT="/transfer/fm-v9b-outputs"
 
 # Without constraints
