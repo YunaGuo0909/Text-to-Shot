@@ -1,16 +1,9 @@
 """
-Dataset for joint person-camera trajectory diffusion training.
+Dataset for joint person-camera trajectory training.
 
-Each sample contains:
-- Person root trajectory: (T, 5) world positions + sin/cos yaw [px, py, pz, sin_yaw, cos_yaw]
-- Camera trajectory: (T, 6) camera state (tx, ty, tz, azimuth, elevation, roll)
-- Text description
-- Shot type label
-- Camera motion type label
-
-Joint representation: y = [person_flat (T*5), camera_flat (T*6)]
-
-Backward compatible: old (T, 3) person files are padded to (T, 5) with sin(0)=0, cos(0)=1.
+Each sample: person root (T, 3) + camera (T, 6) + text + labels.
+Joint vector: y = [person_flat, camera_flat]. Truncates/pads person
+files to match config person_dim (default 3).
 """
 
 import torch

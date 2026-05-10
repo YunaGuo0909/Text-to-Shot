@@ -1,29 +1,30 @@
 # Text-to-Shot
 
-文本到联合人物-相机轨迹生成，当前仅维护 **Flow Matching** 一条主线。
+Text-to-joint person-camera trajectory generation.  
+This repository currently maintains only the **Flow Matching** pipeline.
 
-> 说明：历史方案、实验心路和对比分析统一放在 `report_v2.md`，README 只保留当前可用流程。
-
----
-
-## 任务定义
-
-输入一段文本，生成一段长度为 `T=48` 的联合轨迹：
-
-- 人物轨迹：`(T, Dp)`，当前训练配置常用 `Dp=3`（`px, py, pz`）
-- 相机轨迹：`(T, 6)`，`[tx, ty, tz, azimuth, elevation, roll]`
-- 联合向量：`[person_flat, camera_flat]`
+> Note: historical approaches, experiment history, and comparisons are consolidated in `report_v2.md`. This README only keeps the currently supported workflow.
 
 ---
 
-## 安装
+## Task Definition
 
-要求：
+Given a text prompt, generate a joint trajectory of length `T=48`:
+
+- Person trajectory: `(T, Dp)`, with current training commonly using `Dp=3` (`px, py, pz`)
+- Camera trajectory: `(T, 6)`, `[tx, ty, tz, azimuth, elevation, roll]`
+- Joint vector: `[person_flat, camera_flat]`
+
+---
+
+## Installation
+
+Requirements:
 
 - Python >= 3.10
-- 推荐 CUDA GPU（训练）
+- CUDA GPU recommended (for training)
 
-安装：
+Install:
 
 ```bash
 pip install -e .
@@ -31,21 +32,21 @@ pip install -e .
 
 ---
 
-## 快速开始
+## Quick Start
 
-默认示例使用 `experiments/flow_matching/configs/v9.yaml`。
+The default examples use `experiments/flow_matching/configs/v9.yaml`.
 
-### 1) 准备数据（如果已有可跳过）
+### 1) Prepare Data (skip if already available)
 
-将训练数据整理为：
+Organize your training data as:
 
 - `<data_root>/train_index.json`
 - `<data_root>/test_index.json`
-- 索引中指向的人物/相机 `.npy` 轨迹文件
+- Person/camera `.npy` trajectories referenced by those index files
 
-如果需要从 E.T. / AMASS / HumanML3D 重建数据，可用 `scripts/` 下的数据脚本。
+If you need to rebuild data from E.T. / AMASS / HumanML3D, use the data scripts under `scripts/`.
 
-### 2) 计算归一化统计（推荐）
+### 2) Compute Normalization Statistics (recommended)
 
 ```bash
 python scripts/compute_norm_stats.py \
@@ -55,9 +56,9 @@ python scripts/compute_norm_stats.py \
   --camera-dim 6
 ```
 
-默认输出：`/transfer/merged-v9b/norm_stats.json`
+Default output: `/transfer/merged-v9b/norm_stats.json`
 
-### 3) 训练
+### 3) Train
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/train.py \
@@ -65,7 +66,7 @@ PYTHONPATH=. python experiments/flow_matching/train.py \
   --device cuda
 ```
 
-### 4) 推理
+### 4) Inference
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/generate.py \
@@ -76,7 +77,7 @@ PYTHONPATH=. python experiments/flow_matching/generate.py \
   --guidance-scale 3.0
 ```
 
-可选：开启硬约束后处理
+Optional: enable hard-constraint postprocessing
 
 ```bash
 --enforce-constraints
@@ -84,9 +85,9 @@ PYTHONPATH=. python experiments/flow_matching/generate.py \
 
 ---
 
-## 输出文件
+## Output Files
 
-默认输出目录由配置文件 `paths.output_dir` 指定，典型产物：
+The default output directory is controlled by `paths.output_dir` in config. Typical outputs:
 
 - `fm_person_<tag>.npy`
 - `fm_camera_<tag>.npy`
@@ -94,30 +95,30 @@ PYTHONPATH=. python experiments/flow_matching/generate.py \
 
 ---
 
-## 关键目录
+## Key Directories
 
 ```text
 experiments/flow_matching/
-  configs/v9.yaml            # 当前主配置
-  train.py                   # 训练入口
-  generate.py                # 推理入口
-  postprocess_constraints.py # 可选硬约束后处理
+  configs/v9.yaml            # Current primary config
+  train.py                   # Training entry point
+  generate.py                # Inference entry point
+  postprocess_constraints.py # Optional hard-constraint postprocessing
 
 src/
-  data/dataset.py            # 数据加载与归一化
-  models/                    # 核心模型组件
+  data/dataset.py            # Data loading and normalization
+  models/                    # Core model components
 
 scripts/
-  compute_norm_stats.py      # 归一化统计
-  preprocess_et_data.py      # 数据预处理（按需）
-  prepare_amass.py           # 数据准备（按需）
-  prepare_humanml3d.py       # 数据准备（按需）
-  merge_datasets.py          # 数据合并（按需）
+  compute_norm_stats.py      # Normalization stats
+  preprocess_et_data.py      # Data preprocessing (as needed)
+  prepare_amass.py           # Data preparation (as needed)
+  prepare_humanml3d.py       # Data preparation (as needed)
+  merge_datasets.py          # Dataset merge (as needed)
 ```
 
 ---
 
-## 文档
+## Documentation
 
-- 主报告：`report_v2.md`
-- 旧版报告：`report_v1.md`
+- Main report: `report_v2.md`
+- Legacy report: `report_v1.md`

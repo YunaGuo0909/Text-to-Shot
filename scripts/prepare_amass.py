@@ -1,21 +1,9 @@
 """
-Prepare AMASS human motion data for joint person-camera trajectory training.
-
-Downloads AMASS motion capture data (or uses a local copy), extracts root
-translations, generates synthetic camera trajectories using cinematography
-rules, and produces captions from templates.
-
-Each person trajectory chunk is paired with EVERY camera motion type to
-produce balanced augmentation data.
-
-Outputs (same format as E.T. preprocessed data):
-  - <output-root>/camera_trajectories/*.npy  (48, 6)
-  - <output-root>/person_trajectories/*.npy  (48, 5)  [px, py, pz, sin_yaw, cos_yaw]
-  - <output-root>/train_index.json
+Prepare AMASS data for training. Extracts root translations, generates
+synthetic camera trajectories per motion type, produces template captions.
 
 Usage:
-    python scripts/prepare_amass.py --amass-root /transfer/amass --output-root /transfer/amass-stc-data
-    python scripts/prepare_amass.py --output-root /transfer/amass-stc-data  # auto-download CMU subset
+    python scripts/prepare_amass.py --amass-root /transfer/amassdata --output-root /transfer/amass-stc-data
 """
 
 import os
@@ -171,20 +159,8 @@ def _direction_label(dx: float, dz: float, threshold: float = 0.15) -> str:
 
 
 def infer_action(person_traj: np.ndarray) -> str:
-    """
-    Infer action from person trajectory with multi-phase awareness.
-
-    Accepts (T, 3) or (T, 5) trajectories. If dim 5 is present (sin_yaw, cos_yaw),
-    recovers yaw via atan2 to detect turning and enriches the description.
-
-    Strategy:
-    1. Check overall speed — if very slow → stationary.
-    2. Split into thirds and get dominant XZ direction for each third.
-    3. If all thirds agree → single-direction description.
-    4. If two distinct directions appear → two-phase description.
-    5. If three distinct directions → "moves in multiple directions".
-    6. If yaw changes significantly (>45 deg), append turning info.
-    """
+    """Infer action description from person trajectory. Splits into thirds
+    to detect direction changes. Appends turning info if yaw available."""
     T = len(person_traj)
 
     # Overall per-frame speed in XZ plane
@@ -255,15 +231,7 @@ def look_at_angles(cam_pos: np.ndarray, target: np.ndarray):
 
 def generate_camera_for_person(person_traj: np.ndarray, motion_type: str,
                                num_frames: int = 48) -> tuple:
-    """
-    Generate a synthetic camera trajectory for a person trajectory.
-
-    Simple, deterministic rules per motion type. Each motion type produces
-    a consistent trajectory pattern so the model learns a clean mapping.
-
-    Returns:
-        (camera_traj, shot_type) or (None, None) if incompatible.
-    """
+    """Generate synthetic camera trajectory. Returns (cam, shot_type) or (None, None)."""
     T = num_frames
     if person_traj.shape[1] > 3:
         person_pos = person_traj[:, :3]
@@ -445,22 +413,8 @@ def find_npz_files(root_dir: str) -> list:
 
 def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
                    chunk_frames: int = 48, root_orient: np.ndarray = None) -> list:
-    """
-    Extract fixed-length trajectory chunks from a long motion sequence.
-
-    Downsamples from source_fps to target_fps, then splits into chunks
-    of chunk_frames frames.
-
-    Args:
-        trans: (T_source, 3) root translation at source_fps.
-        source_fps: frames per second of the source data.
-        target_fps: target fps (24 for our model).
-        chunk_frames: number of frames per chunk (48).
-        root_orient: (T_source, 3) axis-angle root orientation, or None.
-
-    Returns:
-        List of (chunk_frames, 5) numpy arrays [px, py, pz, sin_yaw, cos_yaw].
-    """
+    """Extract fixed-length chunks from a motion sequence.
+    Resamples to target_fps, splits into non-overlapping chunks."""
     T_src = trans.shape[0]
     duration_sec = T_src / source_fps
     T_target = int(duration_sec * target_fps)
@@ -495,11 +449,7 @@ def extract_chunks(trans: np.ndarray, source_fps: float, target_fps: int = 24,
 
 
 def download_amass_subset(output_dir: str, subset: str = 'CMU') -> bool:
-    """
-    Attempt to download an AMASS sub-dataset from HuggingFace.
-
-    Returns True on success, False on failure.
-    """
+    """Try downloading an AMASS subset from HuggingFace. Returns success bool."""
     print(f"\nAttempting to download AMASS {subset} subset from HuggingFace...")
     try:
         from huggingface_hub import snapshot_download

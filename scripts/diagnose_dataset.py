@@ -218,7 +218,7 @@ def main():
                 sample_angles.append(cam[:, 3:])  # az, el, roll
     if sample_angles:
         angles = np.concatenate(sample_angles, axis=0)
-        print(f"  Raw angle values — min: {angles.min():.4f}, max: {angles.max():.4f}, "
+        print(f"  Raw angle values: min={angles.min():.4f}, max={angles.max():.4f}, "
               f"mean: {angles.mean():.4f}")
         print(f"  Interpretation: {'RADIANS (within ±π)' if abs(angles).max() < 4.0 else 'DEGREES or other'}")
 
