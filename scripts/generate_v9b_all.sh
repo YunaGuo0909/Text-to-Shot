@@ -1,8 +1,8 @@
 #!/bin/bash
 export PYTHONPATH=.
 
-CKPT="/transfer/fm-v9-checkpoints/fm_final.pth"
-OUT="/transfer/fm-v9b-outputs"
+CKPT="/transfer/fm-v10-checkpoints/fm_best.pth"
+OUT="/transfer/fm-v10-outputs"
 
 # Without constraints
 python experiments/flow_matching/generate.py --checkpoint "$CKPT" --text "The camera remains static while the character walks forward" --motion static --guidance-scale 3.0 --output-dir "$OUT"

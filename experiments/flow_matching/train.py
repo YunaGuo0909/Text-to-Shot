@@ -199,6 +199,7 @@ def train(config, args):
 
     train_losses = []
     val_losses = []
+    best_val_loss = float('inf')
 
     for epoch in range(start_epoch, num_epochs):
         flow.train()
@@ -224,29 +225,42 @@ def train(config, args):
             motion_types = batch['motion_types'].to(device)
             motion_type = motion_types if (motion_types >= 0).all() else None
 
-            flow_loss = flow.flow_loss(y, text_embed,
-                                      shot_type=shot_type,
-                                      motion_type=motion_type)
+            # Flow loss + get predicted velocity for smooth regularization
+            B = y.shape[0]
+            person_total = T * p_dim
 
-            # === Loss 1: Temporal smoothness on GT camera angles ===
-            # Data analysis shows GT angles are extremely smooth (median 0.001 deg/frame).
-            # Penalising large frame-to-frame angle changes trains the model to match this.
+            t_fm = torch.rand(B, device=device)
+            epsilon = torch.randn_like(y)
+            x_t = (1.0 - t_fm.unsqueeze(-1)) * epsilon + t_fm.unsqueeze(-1) * y
+            v_target = y - epsilon
+
+            t_scaled = ((1.0 - t_fm) * 999).long()
+            v_pred = flow.denoiser(x_t, t_scaled, text_embed,
+                                   shot_type=shot_type, motion_type=motion_type)
+
+            flow_loss = torch.nn.functional.mse_loss(v_pred, v_target)
+
+            # === Smooth loss on PREDICTED velocity (not GT) ===
+            # Penalizes non-smooth predicted trajectories to encourage
+            # cinematically plausible camera motion.
             smooth_weight = train_cfg.get('smooth_loss_weight', 0.05)
             smooth_loss = torch.tensor(0.0, device=device)
             if smooth_weight > 0:
-                B = y.shape[0]
-                person_total = T * p_dim
-                # Camera angle smoothness
-                cam_gt = y[:, person_total:].reshape(B, T, c_dim)
-                angle_diff = cam_gt[:, 1:, 3:] - cam_gt[:, :-1, 3:]
-                angle_smooth = (angle_diff ** 2).mean()
-                # Camera position smoothness
-                pos_diff = cam_gt[:, 1:, :3] - cam_gt[:, :-1, :3]
-                pos_smooth = (pos_diff ** 2).mean()
-                # Person position smoothness
-                per_gt = y[:, :person_total].reshape(B, T, p_dim)
-                per_diff = per_gt[:, 1:] - per_gt[:, :-1]
+                # Reconstruct predicted x_0 from v_pred
+                x0_pred = x_t + (1.0 - t_fm.unsqueeze(-1)) * v_pred
+
+                # Camera smoothness on predicted trajectory
+                cam_pred = x0_pred[:, person_total:].reshape(B, T, c_dim)
+                cam_angle_diff = cam_pred[:, 1:, 3:] - cam_pred[:, :-1, 3:]
+                cam_pos_diff = cam_pred[:, 1:, :3] - cam_pred[:, :-1, :3]
+                angle_smooth = (cam_angle_diff ** 2).mean()
+                pos_smooth = (cam_pos_diff ** 2).mean()
+
+                # Person smoothness on predicted trajectory
+                per_pred = x0_pred[:, :person_total].reshape(B, T, p_dim)
+                per_diff = per_pred[:, 1:] - per_pred[:, :-1]
                 per_smooth = (per_diff ** 2).mean()
+
                 smooth_loss = angle_smooth + 0.5 * pos_smooth + 0.5 * per_smooth
 
             # === Loss 2: Camera look-at loss ===
@@ -324,6 +338,22 @@ def train(config, args):
             print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  lr: {current_lr:.2e}  smooth: {smooth_loss.item():.4f}  lookat: {lookat_loss.item():.4f}")
         else:
             print(f"Epoch [{epoch+1}/{num_epochs}] Train: {avg_train_loss:.6f}  Val: {avg_val_loss:.6f}  lr: {current_lr:.2e}  smooth: {smooth_loss.item():.4f}  lookat: {lookat_loss.item():.4f}")
+
+        # Save best val checkpoint
+        if not np.isnan(avg_val_loss) and avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_path = os.path.join(checkpoint_dir, 'fm_best.pth')
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': flow.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'train_losses': train_losses,
+                'val_losses': val_losses,
+                'config': config,
+            }, best_path)
+            print(f"  New best val: {avg_val_loss:.6f} (epoch {epoch+1})")
 
         if (epoch + 1) % save_interval == 0:
             ckpt_path = os.path.join(checkpoint_dir, f'fm_epoch{epoch+1}.pth')
