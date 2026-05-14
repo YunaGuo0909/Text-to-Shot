@@ -212,7 +212,7 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     ax1.scatter(*person_traj[-1, :3], color='#95E66D', s=80, marker='v',
                 edgecolors='white', linewidths=1.5, zorder=5)
 
-    # Camera orientation arrows in 3D (every few frames, orange)
+    # Camera orientation arrows in 3D — always point toward person
     arrow_interval = max(1, num_frames // 6)
     arrow_len_factor = 0.25 * max(
         np.ptp(camera_traj[:, :3], axis=0).max(),
@@ -221,8 +221,9 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     )
     for i in range(0, num_frames, arrow_interval):
         cx, cy, cz = camera_traj[i, :3]
-        az, el = camera_traj[i, 3], camera_traj[i, 4]
-        fwd = _camera_forward(az, el) * arrow_len_factor
+        dx, dy, dz = person_traj[i, :3] - camera_traj[i, :3]
+        norm = np.sqrt(dx**2 + dy**2 + dz**2) + 1e-8
+        fwd = np.array([dx, dy, dz]) / norm * arrow_len_factor
         ax1.quiver(cx, cy, cz, fwd[0], fwd[1], fwd[2],
                    color='#FF9F43', arrow_length_ratio=0.35,
                    linewidth=2.5, alpha=0.9)
@@ -269,9 +270,11 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     frust_half_w = frust_len * 0.4      # half-width of the triangle base
     for i in range(0, num_frames, arrow_interval):
         cx, cz = camera_traj[i, 0], camera_traj[i, 2]
-        az = camera_traj[i, 3]
-        # forward direction in XZ plane
-        fx, fz = np.sin(az), -np.cos(az)
+        # forward direction in XZ plane — point toward person
+        dx = person_traj[i, 0] - cx
+        dz = person_traj[i, 2] - cz
+        d_norm = np.sqrt(dx**2 + dz**2) + 1e-8
+        fx, fz = dx / d_norm, dz / d_norm
         # perpendicular direction
         rx, rz = fz, -fx
         # triangle: tip = forward, two base corners behind
@@ -326,12 +329,16 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     ax3.tick_params(colors='gray', labelsize=7)
     ax3.grid(alpha=0.15)
 
-    # ---- Panel 4: Camera orientation over time ----
+    # ---- Panel 4: Camera orientation over time (look-at derived) ----
     ax4 = fig.add_subplot(234, facecolor='#2C3E50')
-    for i, (name, c) in enumerate(zip(['azimuth', 'elevation', 'roll'],
-                                       ['#C44ECD', '#95E66D', '#FF9F43'])):
-        ax4.plot(t_axis, np.degrees(camera_traj[:, 3 + i]), color=c,
-                 linewidth=1.5, label=name)
+    # Compute look-at azimuth and elevation from camera→person vector
+    cam2person = person_traj[:, :3] - camera_traj[:, :3]
+    lookat_az = np.arctan2(cam2person[:, 0], -cam2person[:, 2])
+    lookat_el = -np.arctan2(cam2person[:, 1],
+                            np.sqrt(cam2person[:, 0]**2 + cam2person[:, 2]**2) + 1e-8)
+    ax4.plot(t_axis, np.degrees(lookat_az), color='#C44ECD', linewidth=1.5, label='azimuth')
+    ax4.plot(t_axis, np.degrees(lookat_el), color='#95E66D', linewidth=1.5, label='elevation')
+    ax4.plot(t_axis, np.degrees(camera_traj[:, 5]), color='#FF9F43', linewidth=1.5, label='roll')
     ax4.set_title('Camera Orientation (degrees)', color='white', fontsize=10)
     ax4.set_xlabel('time', color='gray', fontsize=8)
     ax4.set_ylabel('degrees', color='gray', fontsize=8)
