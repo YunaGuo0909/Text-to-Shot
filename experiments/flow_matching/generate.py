@@ -74,6 +74,34 @@ def smooth_trajectory(traj, window=7, polyorder=2, angle_dims=None, angle_window
     return smoothed
 
 
+def apply_lookat(camera_traj, person_traj, smooth_window=15):
+    """
+    Replace model-predicted camera orientation (azimuth, elevation, roll)
+    with geometrically correct look-at direction toward the person.
+
+    camera_traj: (T, 6) — tx, ty, tz, azimuth, elevation, roll
+    person_traj: (T, 3) — px, py, pz
+    """
+    cam2person = person_traj[:, :3] - camera_traj[:, :3]
+    # azimuth: angle in XZ plane (atan2(x, -z))
+    az = np.arctan2(cam2person[:, 0], -cam2person[:, 2])
+    # elevation: angle from horizontal plane (negative = looking down)
+    horiz_dist = np.sqrt(cam2person[:, 0]**2 + cam2person[:, 2]**2) + 1e-8
+    el = -np.arctan2(cam2person[:, 1], horiz_dist)
+
+    # Smooth the computed angles to avoid jitter
+    if smooth_window >= 3 and len(az) >= smooth_window:
+        w = smooth_window if smooth_window % 2 == 1 else smooth_window - 1
+        az = savgol_filter(az, window_length=w, polyorder=2)
+        el = savgol_filter(el, window_length=w, polyorder=2)
+
+    result = camera_traj.copy()
+    result[:, 3] = az
+    result[:, 4] = el
+    result[:, 5] = 0.0  # zero roll for stability
+    return result
+
+
 def freeze_static_dims(traj, threshold=0.05):
     """
     Per-dimension: if the total range of a dimension is below threshold,
@@ -285,6 +313,10 @@ def generate(args):
             camera_traj = freeze_static_dims(camera_traj, threshold=0.05)
             print(f"  Smoothing + regularize + freeze applied")
 
+        if args.lookat:
+            camera_traj = apply_lookat(camera_traj, person_traj, smooth_window=15)
+            print(f"  Look-at orientation applied")
+
         if args.enforce_constraints:
             from experiments.flow_matching.postprocess_constraints import apply_constraints
             person_traj, camera_traj = apply_constraints(
@@ -320,6 +352,8 @@ def main():
     parser.add_argument('--output-dir', type=str, default=None,
                         help='Override output directory (default: from config)')
     parser.add_argument('--no-smooth', action='store_true')
+    parser.add_argument('--lookat', action='store_true',
+                        help='Replace model orientation with look-at toward person')
     parser.add_argument('--enforce-constraints', action='store_true',
                         help='Apply motion-type-aware hard constraints (optional postprocess)')
     args = parser.parse_args()
