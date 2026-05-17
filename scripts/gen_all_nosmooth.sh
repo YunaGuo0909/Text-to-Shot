@@ -5,8 +5,8 @@
 # Usage: bash scripts/gen_all_nosmooth.sh
 
 CKPT="/transfer/fm-v10-checkpoints/fm_best.pth"
-OUT_RAW="outputs/raw_nosmooth"
-OUT_LOOKAT="outputs/raw_lookat"
+OUT_RAW="/transfer/fm-v10-outputs/raw_nosmooth"
+OUT_LOOKAT="/transfer/fm-v10-outputs/raw_lookat"
 
 mkdir -p "$OUT_RAW" "$OUT_LOOKAT"
 

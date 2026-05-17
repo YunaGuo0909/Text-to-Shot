@@ -238,7 +238,16 @@ def train(config, args):
             v_pred = flow.denoiser(x_t, t_scaled, text_embed,
                                    shot_type=shot_type, motion_type=motion_type)
 
-            flow_loss = torch.nn.functional.mse_loss(v_pred, v_target)
+            # Separate person/camera loss with weighting to compensate
+            # dimension imbalance (person=144 dims vs camera=288 dims)
+            person_weight = train_cfg.get('person_loss_weight', 2.0)
+            v_pred_person = v_pred[:, :person_total]
+            v_pred_camera = v_pred[:, person_total:]
+            v_target_person = v_target[:, :person_total]
+            v_target_camera = v_target[:, person_total:]
+            loss_person = torch.nn.functional.mse_loss(v_pred_person, v_target_person)
+            loss_camera = torch.nn.functional.mse_loss(v_pred_camera, v_target_camera)
+            flow_loss = person_weight * loss_person + loss_camera
 
             # === Smooth loss on PREDICTED velocity (not GT) ===
             # Penalizes non-smooth predicted trajectories to encourage

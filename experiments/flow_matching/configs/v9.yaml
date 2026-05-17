@@ -53,6 +53,7 @@ training:
   aux_loss_weight: 0.0
   smooth_loss_weight: 0.08
   lookat_loss_weight: 0.0
+  person_loss_weight: 2.0
   augmentation: true
 
 data:
