@@ -65,6 +65,6 @@ data:
   pin_memory: true
 
 paths:
-  checkpoint_dir: "/transfer/fm-v10-checkpoints"
-  output_dir: "/transfer/fm-v10-outputs"
-  log_dir: "/transfer/fm-v10-logs"
+  checkpoint_dir: "/transfer/fm-v11-checkpoints"
+  output_dir: "/transfer/fm-v11-outputs"
+  log_dir: "/transfer/fm-v11-logs"
