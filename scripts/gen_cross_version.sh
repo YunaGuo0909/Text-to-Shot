@@ -14,7 +14,7 @@ ckpts=(
     "/transfer/fm-v7-checkpoints/fm_final.pth"
     "/transfer/fm-v8-checkpoints/fm_final.pth"
     "/transfer/fm-v10-checkpoints/fm_best.pth"
-    "/transfer/fm-v11-checkpoints/fm_best.pth"
+    "/transfer/fm-v10-checkpoints/fm_final.pth"
 )
 
 outdir="/transfer/fm-v10-outputs/cross_version"
