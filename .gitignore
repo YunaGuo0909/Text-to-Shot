@@ -67,6 +67,8 @@ desktop.ini
 paper_text.txt
 extract_pdf.py
 *.pdf
+*.ipynb
+
 
 # Don't push these
 linuxoutput/
