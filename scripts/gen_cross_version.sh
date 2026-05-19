@@ -1,24 +1,28 @@
 #!/bin/zsh
-# Generate same dolly-in prompt across v4/v5/v6/v9 for cross-version comparison
+# Generate same dolly-in prompt across all versions for cross-version comparison
 # Usage: zsh scripts/gen_cross_version.sh
 
 PROMPT="As the character moves forward, the camera pushes in"
 MOTION="dolly-in"
 SHOT="medium-shot"
 
-versions=(v4 v5 v6 v9)
+versions=(v4 v5 v6 v7 v8 v9 v10)
 ckpts=(
     "/transfer/fm-v4-checkpoints/fm_final.pth"
     "/transfer/fm-v5-checkpoints/fm_final.pth"
     "/transfer/fm-v6-checkpoints/fm_final.pth"
+    "/transfer/fm-v7-checkpoints/fm_final.pth"
+    "/transfer/fm-v8-checkpoints/fm_final.pth"
     "/transfer/fm-v10-checkpoints/fm_best.pth"
+    "/transfer/fm-v11-checkpoints/fm_best.pth"
 )
 
-for i in {1..4}; do
+outdir="/transfer/fm-v10-outputs/cross_version"
+mkdir -p "$outdir"
+
+for i in {1..7}; do
     ver=${versions[$i]}
     ckpt=${ckpts[$i]}
-    outdir="/transfer/fm-v10-outputs/cross_version"
-    mkdir -p "$outdir"
     echo "=== $ver: $ckpt ==="
     if [ ! -f "$ckpt" ]; then
         echo "  SKIP: checkpoint not found"
@@ -41,5 +45,5 @@ for i in {1..4}; do
 done
 
 echo "=== Done ==="
-echo "Outputs in /transfer/fm-v10-outputs/cross_version/"
-ls /transfer/fm-v10-outputs/cross_version/fm_joint_*.png 2>/dev/null
+echo "Outputs in $outdir/"
+ls "$outdir"/fm_joint_*.png 2>/dev/null

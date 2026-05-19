@@ -16,17 +16,18 @@ from flask import Flask, request, render_template_string
 
 from experiments.flow_matching.generate import (
     load_model, smooth_trajectory, regularize_person_trajectory,
-    freeze_static_dims, SHOT_TYPE_MAP, MOTION_TYPE_MAP,
+    freeze_static_dims, apply_lookat, SHOT_TYPE_MAP, MOTION_TYPE_MAP,
 )
 from generate import visualize_joint
 
-# Global state
-FLOW_MODEL = None
-CONFIG = None
+# Global state — dual model support
+MODELS = {}  # key: 'v6' or 'v10', value: dict with model, config, norm_mean, norm_std
 TEXT_ENCODER = None
-NORM_MEAN = None
-NORM_STD = None
 DEVICE = None
+
+# Motion types routed to v6 (person_dim=5, better for these types)
+V6_MOTION_TYPES = {'pan-left', 'track', 'crane-down', 'static', 'dolly-out'}
+# Everything else goes to v10
 
 app = Flask(__name__)
 
@@ -176,25 +177,35 @@ document.getElementById('genForm').addEventListener('submit', async function(e) 
 """
 
 
-def init_model(checkpoint_path, device):
-    global FLOW_MODEL, CONFIG, TEXT_ENCODER, NORM_MEAN, NORM_STD, DEVICE
+def _load_one(checkpoint_path, device):
+    """Load a single model + its norm stats. Returns dict."""
+    flow, config = load_model(checkpoint_path, device)
+    norm_mean = norm_std = None
+    norm_stats_path = config['data'].get('norm_stats_path', None)
+    if norm_stats_path and os.path.exists(norm_stats_path):
+        with open(norm_stats_path, 'r') as f:
+            stats = json.load(f)
+        norm_mean = torch.tensor(stats['mean'], dtype=torch.float32, device=device)
+        norm_std = torch.tensor(stats['std'], dtype=torch.float32, device=device)
+    return {'model': flow, 'config': config, 'norm_mean': norm_mean, 'norm_std': norm_std}
+
+
+def init_model(checkpoint_v6, checkpoint_v10, device):
+    global MODELS, TEXT_ENCODER, DEVICE
     DEVICE = device
-    FLOW_MODEL, CONFIG = load_model(checkpoint_path, device)
+
+    print(f"Loading v6: {checkpoint_v6}")
+    MODELS['v6'] = _load_one(checkpoint_v6, device)
+    print(f"Loading v10: {checkpoint_v10}")
+    MODELS['v10'] = _load_one(checkpoint_v10, device)
 
     try:
         from src.models.text_encoder import CLIPTextEncoder
         TEXT_ENCODER = CLIPTextEncoder(
-            model_name=CONFIG['text_encoder']['model_name'], device=device
+            model_name=MODELS['v10']['config']['text_encoder']['model_name'], device=device
         ).to(device)
     except Exception:
         print("CLIP unavailable, using random embeddings.")
-
-    norm_stats_path = CONFIG['data'].get('norm_stats_path', None)
-    if norm_stats_path and os.path.exists(norm_stats_path):
-        with open(norm_stats_path, 'r') as f:
-            stats = json.load(f)
-        NORM_MEAN = torch.tensor(stats['mean'], dtype=torch.float32, device=device)
-        NORM_STD = torch.tensor(stats['std'], dtype=torch.float32, device=device)
 
 
 @app.route('/')
@@ -216,12 +227,20 @@ def generate():
     if not text:
         return json.dumps({"error": "empty prompt"})
 
-    model_cfg = CONFIG['model']
+    # Route to v6 or v10 based on motion type
+    ver = 'v6' if motion_type in V6_MOTION_TYPES else 'v10'
+    m = MODELS[ver]
+    flow_model = m['model']
+    config = m['config']
+    norm_mean = m['norm_mean']
+    norm_std = m['norm_std']
+
+    model_cfg = config['model']
     person_dim = model_cfg['person_dim']
     camera_dim = model_cfg['camera_dim']
-    num_frames = CONFIG['trajectory']['default_num_frames']
+    num_frames = config['trajectory']['default_num_frames']
     person_total = person_dim * num_frames
-    num_steps = CONFIG['flow_matching']['num_steps']
+    num_steps = config['flow_matching']['num_steps']
 
     if TEXT_ENCODER:
         text_embed = TEXT_ENCODER([text])
@@ -233,14 +252,14 @@ def generate():
     shot_t = torch.tensor([shot_idx], device=DEVICE)
     motion_t = torch.tensor([motion_idx], device=DEVICE)
 
-    y = FLOW_MODEL.sample(
+    y = flow_model.sample(
         text_embed, shot_type=shot_t, motion_type=motion_t,
         device=DEVICE, guidance_scale=guidance_scale,
         num_steps=num_steps,
     )
 
-    if NORM_MEAN is not None:
-        y = y * NORM_STD + NORM_MEAN
+    if norm_mean is not None:
+        y = y * norm_std + norm_mean
 
     y_np = y[0].cpu().numpy()
     person_traj = y_np[:person_total].reshape(num_frames, person_dim)
@@ -253,6 +272,9 @@ def generate():
     person_traj = freeze_static_dims(person_traj, threshold=0.05)
     camera_traj = smooth_trajectory(camera_traj, window=21, angle_dims=[3, 4, 5], angle_window=31)
     camera_traj = freeze_static_dims(camera_traj, threshold=0.05)
+
+    # Apply look-at post-processing
+    camera_traj = apply_lookat(camera_traj, person_traj, smooth_window=15)
 
     # Save to temp file, read as base64
     save_path = f"/tmp/tts_{int(time.time())}.png"
@@ -267,14 +289,20 @@ def generate():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--checkpoint-v6', type=str, required=True,
+                        help='v6 checkpoint (person_dim=5)')
+    parser.add_argument('--checkpoint-v10', type=str, required=True,
+                        help='v10 checkpoint (person_dim=3)')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--port', type=int, default=7861)
     args = parser.parse_args()
 
-    print("Loading model...")
-    init_model(args.checkpoint, args.device if torch.cuda.is_available() else 'cpu')
-    print(f"Model loaded. Starting server on port {args.port}...")
+    print("Loading dual models...")
+    device = args.device if torch.cuda.is_available() else 'cpu'
+    init_model(args.checkpoint_v6, args.checkpoint_v10, device)
+    print(f"v6 routes: {sorted(V6_MOTION_TYPES)}")
+    print(f"v10 routes: everything else")
+    print(f"Starting server on port {args.port}...")
     print(f"Open http://localhost:{args.port} in your browser")
 
     app.run(host='0.0.0.0', port=args.port, debug=False)
