@@ -1,124 +1,113 @@
-# Text-to-Shot
+# Script to Camera
 
-Text-to-joint person-camera trajectory generation.  
-This repository currently maintains only the **Flow Matching** pipeline.
+Joint person-camera trajectory generation from text via Conditional Flow Matching.
 
-> Note: historical approaches, experiment history, and comparisons are consolidated in `report_v2.md`. This README only keeps the currently supported workflow.
+Given a text prompt (e.g. "the camera orbits around the character as they stand still"), the system jointly generates a person root trajectory and a 6-DoF camera trajectory, 48 frames at 24 fps.
 
----
+## Architecture
 
-## Task Definition
-
-Given a text prompt, generate a joint trajectory of length `T=48`:
-
-- Person trajectory: `(T, Dp)`, with current training commonly using `Dp=3` (`px, py, pz`)
-- Camera trajectory: `(T, 6)`, `[tx, ty, tz, azimuth, elevation, roll]`
-- Joint vector: `[person_flat, camera_flat]`
-
----
+- Dual-branch Transformer denoiser (24.7M params, 6 layers, 256 hidden dim)
+- Conditional Flow Matching (OT-CFM) with 50-step Euler ODE sampling
+- CLIP ViT-B/32 text encoder (frozen)
+- 9 motion types: static, dolly-in/out, pan-left/right, crane-up/down, track, orbit
 
 ## Installation
-
-Requirements:
-
-- Python >= 3.10
-- CUDA GPU recommended (for training)
-
-Install:
 
 ```bash
 pip install -e .
 ```
 
----
+Requires Python >= 3.10 and a CUDA GPU for training.
 
-## Quick Start
+## Data Preparation
 
-The default examples use `experiments/flow_matching/configs/v9.yaml`.
+Training uses 609k samples from three sources:
 
-### 1) Prepare Data (skip if already available)
+1. **E.T.** (56k) - real film camera trajectories with SMPL-H person tracks
+2. **AMASS** (477k) - motion capture with rule-based camera supervision
+3. **HumanML3D** (76k) - motion capture with human-written captions
 
-Organize your training data as:
-
-- `<data_root>/train_index.json`
-- `<data_root>/test_index.json`
-- Person/camera `.npy` trajectories referenced by those index files
-
-If you need to rebuild data from E.T. / AMASS / HumanML3D, use the data scripts under `scripts/`.
-
-### 2) Compute Normalization Statistics (recommended)
+Prepare each source, then merge:
 
 ```bash
-python scripts/compute_norm_stats.py \
-  --data-root /transfer/merged-v9b \
-  --index-file train_index.json \
-  --person-dim 3 \
-  --camera-dim 6
+python scripts/preprocess_et_data.py
+python scripts/prepare_amass.py
+python scripts/prepare_humanml3d.py
+python scripts/merge_datasets.py
 ```
 
-Default output: `/transfer/merged-v9b/norm_stats.json`
+Compute normalization statistics:
 
-### 3) Train
+```bash
+python compute_norm_stats.py 3 /path/to/merged-data
+```
+
+## Training
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/train.py \
-  --config experiments/flow_matching/configs/v9.yaml \
-  --device cuda
+    --config experiments/flow_matching/configs/v9.yaml \
+    --device cuda
 ```
 
-### 4) Inference
+Config: `experiments/flow_matching/configs/v9.yaml`
+
+## Inference
 
 ```bash
 PYTHONPATH=. python experiments/flow_matching/generate.py \
-  --checkpoint /transfer/fm-v9b-checkpoints/fm_final.pth \
-  --text "A person walks toward camera" \
-  --motion dolly-in \
-  --shot-type medium-shot \
-  --guidance-scale 3.0
+    --checkpoint /path/to/fm_best.pth \
+    --text "The camera orbits around the character as they stand still" \
+    --motion orbit \
+    --shot-type medium-shot \
+    --guidance-scale 3.0 \
+    --lookat
 ```
 
-Optional: enable hard-constraint postprocessing
+## Evaluation
 
 ```bash
---enforce-constraints
+PYTHONPATH=. python experiments/flow_matching/evaluate.py \
+    --checkpoint /path/to/fm_best.pth \
+    --device cuda \
+    --max-samples 1024
 ```
 
----
+## Web Demo
 
-## Output Files
+```bash
+PYTHONPATH=. python app.py \
+    --checkpoint /path/to/fm_best.pth \
+    --port 7861
+```
 
-The default output directory is controlled by `paths.output_dir` in config. Typical outputs:
+## Project Structure
 
-- `fm_person_<tag>.npy`
-- `fm_camera_<tag>.npy`
-- `fm_joint_<tag>.png`
-
----
-
-## Key Directories
-
-```text
+```
 experiments/flow_matching/
-  configs/v9.yaml            # Current primary config
-  train.py                   # Training entry point
-  generate.py                # Inference entry point
-  postprocess_constraints.py # Optional hard-constraint postprocessing
+    configs/v9.yaml                # Training config
+    train.py                       # Training
+    generate.py                    # Inference + post-processing
+    evaluate.py                    # Quantitative evaluation
+    models/flow_model.py           # Flow Matching implementation
+    postprocess_constraints.py     # Motion-type-aware constraints
 
 src/
-  data/dataset.py            # Data loading and normalization
-  models/                    # Core model components
+    data/dataset.py                # Dataset and data loading
+    models/denoiser.py             # Dual-branch Transformer
+    models/text_encoder.py         # CLIP encoder wrapper
+    models/film.py                 # FiLM conditioning
 
 scripts/
-  compute_norm_stats.py      # Normalization stats
-  preprocess_et_data.py      # Data preprocessing (as needed)
-  prepare_amass.py           # Data preparation (as needed)
-  prepare_humanml3d.py       # Data preparation (as needed)
-  merge_datasets.py          # Dataset merge (as needed)
+    preprocess_et_data.py          # E.T. data preprocessing
+    prepare_amass.py               # AMASS camera generation
+    prepare_humanml3d.py           # HumanML3D preparation
+    merge_datasets.py              # Dataset merging
+    verify_camera_generation.py    # Pre-training data verification
+    gen_cross_version.sh           # Cross-version comparison generation
+
+app.py                             # Flask web demo
+generate.py                        # Legacy DDPM inference (unused)
+compute_norm_stats.py              # Normalization statistics
+ScriptToCamera.ipynb               # End-to-end notebook
 ```
-
----
-
-## Documentation
-
-- Main report: `report_v2.md`
-- Legacy report: `report_v1.md`
