@@ -384,6 +384,112 @@ def visualize_joint(person_traj, camera_traj, text, motion, save_path):
     print(f"Visualization saved to {save_path}")
 
 
+def visualize_animated(person_traj, camera_traj, text, motion, save_path, fps=12):
+    """
+    Generate an animated GIF showing person and camera trajectories evolving over time.
+    Two panels: top-down XZ view (left) and camera-person distance curve (right).
+    """
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    num_frames = len(camera_traj)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5), facecolor='#1a1a2e')
+
+    # --- Panel 1: Top-down XZ view ---
+    ax1.set_facecolor('#2C3E50')
+    # Full path as faint background
+    ax1.plot(camera_traj[:, 0], camera_traj[:, 2], color='#FFE66D', alpha=0.15, linewidth=1)
+    ax1.plot(person_traj[:, 0], person_traj[:, 2], color='#4ECDC4', alpha=0.15, linewidth=1)
+
+    # Animated elements
+    cam_trail, = ax1.plot([], [], color='#FFE66D', linewidth=2, label='Camera')
+    per_trail, = ax1.plot([], [], color='#4ECDC4', linewidth=2, label='Person')
+    cam_dot, = ax1.plot([], [], 'o', color='#FFE66D', markersize=8, markeredgecolor='white', markeredgewidth=1.5)
+    per_dot, = ax1.plot([], [], 'o', color='#4ECDC4', markersize=8, markeredgecolor='white', markeredgewidth=1.5)
+    lookat_line, = ax1.plot([], [], ':', color='white', alpha=0.4, linewidth=1)
+
+    # Frustum triangle (camera look-at direction)
+    scene_extent = max(
+        np.ptp(camera_traj[:, 0]), np.ptp(camera_traj[:, 2]),
+        np.ptp(person_traj[:, 0]), np.ptp(person_traj[:, 2]), 0.5
+    )
+    frust_len = scene_extent * 0.12
+    frust_half_w = frust_len * 0.4
+    frustum_patch = plt.Polygon([[0, 0], [0, 0], [0, 0]], color='#FF9F43', alpha=0.6,
+                                 edgecolor='white', linewidth=0.5)
+    ax1.add_patch(frustum_patch)
+
+    # Axis setup
+    pad = scene_extent * 0.2
+    all_x = np.concatenate([camera_traj[:, 0], person_traj[:, 0]])
+    all_z = np.concatenate([camera_traj[:, 2], person_traj[:, 2]])
+    ax1.set_xlim(all_x.min() - pad, all_x.max() + pad)
+    ax1.set_ylim(all_z.min() - pad, all_z.max() + pad)
+    ax1.set_aspect('equal', adjustable='datalim')
+    ax1.set_xlabel('X', color='gray', fontsize=9)
+    ax1.set_ylabel('Z', color='gray', fontsize=9)
+    ax1.set_title('Top-Down View (XZ)', color='white', fontsize=11)
+    ax1.legend(fontsize=8, labelcolor='white', framealpha=0.3)
+    ax1.tick_params(colors='gray', labelsize=7)
+    ax1.grid(alpha=0.15)
+
+    # Frame counter
+    frame_text = ax1.text(0.02, 0.98, '', transform=ax1.transAxes, color='white',
+                          fontsize=9, verticalalignment='top')
+
+    # --- Panel 2: Distance over time ---
+    ax2.set_facecolor('#2C3E50')
+    dist = np.linalg.norm(camera_traj[:, :3] - person_traj[:, :3], axis=1)
+    t_axis = np.linspace(0, 1, num_frames)
+    ax2.plot(t_axis, dist, color='#FF6B6B', alpha=0.15, linewidth=1)
+    ax2.fill_between(t_axis, 0, dist, color='#FF6B6B', alpha=0.05)
+    dist_line, = ax2.plot([], [], color='#FF6B6B', linewidth=2)
+    dist_dot, = ax2.plot([], [], 'o', color='#FF6B6B', markersize=6, markeredgecolor='white', markeredgewidth=1.5)
+    ax2.set_xlim(0, 1)
+    ax2.set_ylim(0, dist.max() * 1.15)
+    ax2.set_xlabel('time', color='gray', fontsize=9)
+    ax2.set_ylabel('metres', color='gray', fontsize=9)
+    ax2.set_title('Camera-Person Distance', color='white', fontsize=11)
+    ax2.tick_params(colors='gray', labelsize=7)
+    ax2.grid(alpha=0.15)
+
+    title = f'{motion} | "{text[:50]}"'
+    fig.suptitle(title, color='white', fontsize=12, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
+
+    def update(frame):
+        i = frame + 1  # show 1..num_frames
+        cam_trail.set_data(camera_traj[:i, 0], camera_traj[:i, 2])
+        per_trail.set_data(person_traj[:i, 0], person_traj[:i, 2])
+        cam_dot.set_data([camera_traj[i-1, 0]], [camera_traj[i-1, 2]])
+        per_dot.set_data([person_traj[i-1, 0]], [person_traj[i-1, 2]])
+        lookat_line.set_data([camera_traj[i-1, 0], person_traj[i-1, 0]],
+                             [camera_traj[i-1, 2], person_traj[i-1, 2]])
+
+        # Frustum triangle
+        cx, cz = camera_traj[i-1, 0], camera_traj[i-1, 2]
+        dx = person_traj[i-1, 0] - cx
+        dz = person_traj[i-1, 2] - cz
+        d_norm = np.sqrt(dx**2 + dz**2) + 1e-8
+        fx, fz = dx / d_norm, dz / d_norm
+        rx, rz = fz, -fx
+        tip = [cx + fx * frust_len, cz + fz * frust_len]
+        bl = [cx - rx * frust_half_w, cz - rz * frust_half_w]
+        br = [cx + rx * frust_half_w, cz + rz * frust_half_w]
+        frustum_patch.set_xy([tip, bl, br])
+
+        # Distance curve
+        dist_line.set_data(t_axis[:i], dist[:i])
+        dist_dot.set_data([t_axis[i-1]], [dist[i-1]])
+
+        frame_text.set_text(f'Frame {i}/{num_frames}')
+        return cam_trail, per_trail, cam_dot, per_dot, lookat_line, frustum_patch, dist_line, dist_dot, frame_text
+
+    anim = FuncAnimation(fig, update, frames=num_frames, interval=1000//fps, blit=True)
+    anim.save(save_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+    print(f"Animation saved to {save_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate Joint Person-Camera Trajectory')
     parser.add_argument('--checkpoint', type=str, required=True)

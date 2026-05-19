@@ -18,7 +18,7 @@ from experiments.flow_matching.generate import (
     load_model, smooth_trajectory, regularize_person_trajectory,
     freeze_static_dims, apply_lookat, SHOT_TYPE_MAP, MOTION_TYPE_MAP,
 )
-from generate import visualize_joint
+from generate import visualize_joint, visualize_animated
 
 # Global state — dual model support
 MODELS = {}  # key: 'v6' or 'v10', value: dict with model, config, norm_mean, norm_std
@@ -121,9 +121,10 @@ HTML_TEMPLATE = """
     </div>
   </div>
 
-  <div class="panel-right">
+  <div class="panel-right" style="flex-direction:column; gap:12px;">
     <div id="spinner" class="spinner">Generating trajectory...</div>
     <div id="placeholder" class="placeholder">Generated trajectory will appear here</div>
+    <img id="resultGif" class="result-img" style="display:none" />
     <img id="resultImg" class="result-img" style="display:none" />
   </div>
 </div>
@@ -139,12 +140,14 @@ document.getElementById('genForm').addEventListener('submit', async function(e) 
   const spinner = document.getElementById('spinner');
   const placeholder = document.getElementById('placeholder');
   const img = document.getElementById('resultImg');
+  const gif = document.getElementById('resultGif');
 
   btn.disabled = true;
   btn.textContent = 'Generating...';
   spinner.classList.add('active');
   placeholder.style.display = 'none';
   img.style.display = 'none';
+  gif.style.display = 'none';
 
   const params = new URLSearchParams({
     text: document.getElementById('text').value,
@@ -157,6 +160,10 @@ document.getElementById('genForm').addEventListener('submit', async function(e) 
     const resp = await fetch('/generate?' + params.toString());
     const data = await resp.json();
     if (data.image) {
+      if (data.gif) {
+        gif.src = 'data:image/gif;base64,' + data.gif;
+        gif.style.display = 'block';
+      }
       img.src = 'data:image/png;base64,' + data.image;
       img.style.display = 'block';
     } else {
@@ -276,15 +283,22 @@ def generate():
     # Apply look-at post-processing
     camera_traj = apply_lookat(camera_traj, person_traj, smooth_window=15)
 
-    # Save to temp file, read as base64
-    save_path = f"/tmp/tts_{int(time.time())}.png"
-    visualize_joint(person_traj, camera_traj, text, motion_type, save_path=save_path)
+    # Generate static plot + animated GIF
+    ts = int(time.time())
+    png_path = f"/tmp/tts_{ts}.png"
+    gif_path = f"/tmp/tts_{ts}.gif"
 
-    with open(save_path, 'rb') as f:
+    visualize_joint(person_traj, camera_traj, text, motion_type, save_path=png_path)
+    visualize_animated(person_traj, camera_traj, text, motion_type, save_path=gif_path, fps=12)
+
+    with open(png_path, 'rb') as f:
         img_b64 = base64.b64encode(f.read()).decode('utf-8')
-    os.remove(save_path)
+    with open(gif_path, 'rb') as f:
+        gif_b64 = base64.b64encode(f.read()).decode('utf-8')
+    os.remove(png_path)
+    os.remove(gif_path)
 
-    return json.dumps({"image": img_b64})
+    return json.dumps({"image": img_b64, "gif": gif_b64})
 
 
 if __name__ == '__main__':
