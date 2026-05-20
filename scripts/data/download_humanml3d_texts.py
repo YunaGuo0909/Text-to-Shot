@@ -17,9 +17,9 @@ Output format (saved to /transfer/humanml3d_captions.json):
 }
 
 Usage:
-    python scripts/download_humanml3d_texts.py
-    python scripts/download_humanml3d_texts.py --output /transfer/humanml3d_captions.json
-    python scripts/download_humanml3d_texts.py --humanml3d-root /path/to/existing/HumanML3D
+    python scripts/data/download_humanml3d_texts.py
+    python scripts/data/download_humanml3d_texts.py --output /transfer/humanml3d_captions.json
+    python scripts/data/download_humanml3d_texts.py --humanml3d-root /path/to/existing/HumanML3D
 """
 
 import os

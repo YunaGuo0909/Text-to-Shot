@@ -2,7 +2,7 @@
 Diagnose why smplh/ files aren't matching during preprocessing.
 
 Usage:
-    python scripts/diagnose_smplh.py
+    python scripts/debug/diagnose_smplh.py
 """
 import os
 import pickle

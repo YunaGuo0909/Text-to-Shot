@@ -14,8 +14,8 @@ Outputs:
   - stc-data/test_index.json
 
 Usage:
-    python scripts/preprocess_et_data.py
-    python scripts/preprocess_et_data.py --et-root /transfer/et-data --output-root /transfer/stc-data
+    python scripts/data/preprocess_et_data.py
+    python scripts/data/preprocess_et_data.py --et-root /transfer/et-data --output-root /transfer/stc-data
 """
 
 import os
@@ -319,7 +319,7 @@ def main():
     # Check dataset exists
     if not os.path.isdir(et_root):
         print(f"Error: E.T. dataset not found at {et_root}")
-        print("Run: python scripts/download_et_data.py")
+        print("Run: python scripts/data/download_et_data.py")
         return
 
     traj_dir = os.path.join(et_root, 'traj')

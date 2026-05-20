@@ -7,8 +7,8 @@ Produces:
   3. combined.gif         - side-by-side split screen
 
 Usage:
-    python scripts/visualize_animated.py --person path/to/person.npy --camera path/to/camera.npy --output-dir ./output
-    python scripts/visualize_animated.py --person path/to/person.npy --camera path/to/camera.npy --title "dolly-in" --fps 12
+    python scripts/viz/visualize_animated.py --person path/to/person.npy --camera path/to/camera.npy --output-dir ./output
+    python scripts/viz/visualize_animated.py --person path/to/person.npy --camera path/to/camera.npy --title "dolly-in" --fps 12
 """
 
 import argparse

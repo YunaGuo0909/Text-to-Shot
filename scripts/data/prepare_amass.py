@@ -3,7 +3,7 @@ Prepare AMASS data for training. Extracts root translations, generates
 synthetic camera trajectories per motion type, produces template captions.
 
 Usage:
-    python scripts/prepare_amass.py --amass-root /transfer/amassdata --output-root /transfer/amass-stc-data
+    python scripts/data/prepare_amass.py --amass-root /transfer/amassdata --output-root /transfer/amass-stc-data
 """
 
 import os
@@ -520,7 +520,7 @@ def print_manual_download_instructions():
        |   +-- ...
 
 4. Re-run this script with:
-       python scripts/prepare_amass.py --amass-root /transfer/amass --output-root /transfer/amass-stc-data
+       python scripts/data/prepare_amass.py --amass-root /transfer/amass --output-root /transfer/amass-stc-data
 
 Alternative: Some AMASS sub-datasets are mirrored on HuggingFace:
     pip install huggingface_hub

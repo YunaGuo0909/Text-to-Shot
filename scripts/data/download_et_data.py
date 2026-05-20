@@ -7,8 +7,8 @@ If /transfer/et-data/traj/ already exists, it will NOT download.
 Source: https://huggingface.co/datasets/robin-courant/et-data
 
 Usage:
-    python scripts/download_et_data.py
-    python scripts/download_et_data.py --download-dir /path/to/et-data
+    python scripts/data/download_et_data.py
+    python scripts/data/download_et_data.py --download-dir /path/to/et-data
 """
 
 import os
@@ -120,8 +120,8 @@ def main():
 
 def _print_next_steps(download_dir):
     print("\nNext steps:")
-    print(f"  1. Preprocess:    python scripts/preprocess_et_data.py --et-root {download_dir}")
-    print(f"  2. Filter single: python scripts/filter_et_single_person.py --data-root /transfer/stc-data")
+    print(f"  1. Preprocess:    python scripts/data/preprocess_et_data.py --et-root {download_dir}")
+    print(f"  2. Filter single: python scripts/data/filter_et_single_person.py --data-root /transfer/stc-data")
     print(f"  3. Train:         python train.py --config configs/default.yaml --device cuda --single-person")
 
 

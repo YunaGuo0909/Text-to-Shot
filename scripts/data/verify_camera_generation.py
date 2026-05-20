@@ -14,7 +14,7 @@ generate_camera_for_person function, then checks:
 9. All types: camera-person distance > 0.5m (no collision)
 
 Usage:
-    PYTHONPATH=. python scripts/verify_camera_generation.py
+    PYTHONPATH=. python scripts/data/verify_camera_generation.py
 """
 
 import numpy as np

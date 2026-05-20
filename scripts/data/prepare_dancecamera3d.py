@@ -11,7 +11,7 @@ Outputs (same format as E.T. preprocessed data):
   - <output-root>/train_index.json
 
 Usage:
-    python scripts/prepare_dancecamera3d.py --data-root /transfer/dancecamera3d --output-root /transfer/dance-stc-data
+    python scripts/data/prepare_dancecamera3d.py --data-root /transfer/dancecamera3d --output-root /transfer/dance-stc-data
 """
 
 import os
@@ -280,7 +280,7 @@ def print_manual_download_instructions():
        /transfer/dancecamera3d/
 
 5. Re-run this script with:
-       python scripts/prepare_dancecamera3d.py \\
+       python scripts/data/prepare_dancecamera3d.py \\
            --data-root /transfer/dancecamera3d \\
            --output-root /transfer/dance-stc-data
 

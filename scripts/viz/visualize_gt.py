@@ -2,8 +2,8 @@
 Visualize a few ground-truth samples from the training set.
 
 Usage:
-    python scripts/visualize_gt.py
-    python scripts/visualize_gt.py --motion dolly-out --n 3
+    python scripts/viz/visualize_gt.py
+    python scripts/viz/visualize_gt.py --motion dolly-out --n 3
 """
 import os
 import json

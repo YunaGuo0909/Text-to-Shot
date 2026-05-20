@@ -21,11 +21,6 @@ class FiLMLayer(nn.Module):
     """
 
     def __init__(self, feature_dim, condition_dim):
-        """
-        Args:
-            feature_dim: Dimension of input features to modulate
-            condition_dim: Dimension of conditioning signal
-        """
         super().__init__()
         self.film_generator = nn.Sequential(
             nn.Linear(condition_dim, condition_dim),
@@ -34,14 +29,6 @@ class FiLMLayer(nn.Module):
         )
 
     def forward(self, x, condition):
-        """
-        Args:
-            x: Input features (batch_size, feature_dim)
-            condition: Conditioning signal (batch_size, condition_dim)
-            
-        Returns:
-            Modulated features (batch_size, feature_dim)
-        """
         film_params = self.film_generator(condition)
         gamma, beta = film_params.chunk(2, dim=-1)
         return gamma * x + beta

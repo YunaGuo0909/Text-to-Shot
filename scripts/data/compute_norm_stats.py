@@ -2,8 +2,8 @@
 Compute per-dimension normalization statistics from training data.
 
 Run ONCE before training:
-    python scripts/compute_norm_stats.py
-    python scripts/compute_norm_stats.py --index-file train_index_single_person.json
+    python scripts/data/compute_norm_stats.py
+    python scripts/data/compute_norm_stats.py --index-file train_index_single_person.json
 """
 
 import os

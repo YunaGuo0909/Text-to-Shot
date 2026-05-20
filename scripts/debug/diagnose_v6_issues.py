@@ -9,8 +9,8 @@ Checks:
 5. Person .npy file dimensions (3 vs 5)
 
 Usage:
-    python scripts/diagnose_v6_issues.py --data-root /transfer/merged-v8
-    python scripts/diagnose_v6_issues.py --data-root /transfer/merged-v7
+    python scripts/debug/diagnose_v6_issues.py --data-root /transfer/merged-v8
+    python scripts/debug/diagnose_v6_issues.py --data-root /transfer/merged-v7
 """
 
 import os

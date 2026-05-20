@@ -104,9 +104,8 @@ def apply_lookat(camera_traj, person_traj, smooth_window=15):
 
 def freeze_static_dims(traj, threshold=0.05):
     """
-    Per-dimension: if the total range of a dimension is below threshold,
-    treat it as static and replace with its mean value (completely freeze it).
-    Eliminates residual oscillation on near-static trajectories.
+    Per-dimension: if the total range is below threshold,
+    replace with the mean value (freeze it). Kills jitter on near-static dims.
     """
     result = traj.copy()
     for d in range(traj.shape[1]):
@@ -117,7 +116,7 @@ def freeze_static_dims(traj, threshold=0.05):
 
 def regularize_person_trajectory(traj, static_threshold=0.15, segment_cost=0.3):
     """
-    Make person trajectory physically plausible:
+    Clean up person trajectory:
     - If overall displacement is small, freeze to stationary.
     - Otherwise, detect segments of roughly linear motion and straighten each.
     - Connect segments with smooth cubic interpolation for turns.

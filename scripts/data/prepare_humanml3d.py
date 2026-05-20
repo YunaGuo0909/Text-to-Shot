@@ -13,7 +13,7 @@ Outputs (same format as other prepare_* scripts):
   - <output-root>/train_index.json
 
 Usage:
-    python scripts/prepare_humanml3d.py --amass-root /transfer/amassdata --humanml3d-root /transfer/HumanML3D --output-root /transfer/humanml3d-stc-data-v7
+    python scripts/data/prepare_humanml3d.py --amass-root /transfer/amassdata --humanml3d-root /transfer/HumanML3D --output-root /transfer/humanml3d-stc-data-v7
 """
 
 import os

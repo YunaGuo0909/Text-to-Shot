@@ -249,9 +249,7 @@ def train(config, args):
             loss_camera = torch.nn.functional.mse_loss(v_pred_camera, v_target_camera)
             flow_loss = person_weight * loss_person + loss_camera
 
-            # === Smooth loss on PREDICTED velocity (not GT) ===
-            # Penalizes non-smooth predicted trajectories to encourage
-            # cinematically plausible camera motion.
+            # smooth regularization on predicted trajectory (not GT)
             smooth_weight = train_cfg.get('smooth_loss_weight', 0.05)
             smooth_loss = torch.tensor(0.0, device=device)
             if smooth_weight > 0:
@@ -272,9 +270,7 @@ def train(config, args):
 
                 smooth_loss = angle_smooth + 0.5 * pos_smooth + 0.5 * per_smooth
 
-            # === Loss 2: Camera look-at loss ===
-            # Camera forward vector should roughly point toward person position.
-            # This directly penalises the model when it generates cameras facing away.
+            # look-at loss: penalize when camera forward doesn't point toward person
             lookat_weight = train_cfg.get('lookat_loss_weight', 0.02)
             lookat_loss = torch.tensor(0.0, device=device)
             if lookat_weight > 0:

@@ -1,17 +1,13 @@
 """
 Joint Person-Camera Trajectory Denoiser.
 
-Dual-branch Transformer that jointly denoises person root trajectory (T, 3)
-and camera trajectory (T, 6) with cross-attention between branches.
+Dual-branch Transformer that predicts velocity fields for person root (T, 3)
+and camera (T, 6) trajectories with cross-attention between branches.
 
-The person branch and camera branch each have self-attention for temporal
-coherence, plus cross-attention so camera motion is aware of person motion
-and vice versa. Both branches are conditioned on text (CLIP), diffusion
-timestep, shot type, and camera motion type via FiLM modulation.
-
-Reference:
-- Tevet, G., et al. (2022). Human Motion Diffusion Model (MDM). ICLR.
-- Ho, J., et al. (2020). Denoising Diffusion Probabilistic Models. NeurIPS.
+Each branch has per-frame self-attention for temporal dynamics, plus
+cross-attention to the other branch so they stay spatially coupled.
+Both branches are conditioned on text (CLIP), flow timestep, shot type,
+and motion type via FiLM modulation.
 """
 
 import torch
@@ -226,7 +222,7 @@ class JointTrajectoryDenoiser(nn.Module):
         Args:
             y_t: (B, total_dim) noisy joint trajectory
                  [person_flat (T*3), camera_flat (T*6)]
-            t: (B,) diffusion timestep
+            t: (B,) flow timestep (scaled to [0, 999])
             text_embed: (B, text_dim)
             shot_type: (B,) or None
             motion_type: (B,) or None

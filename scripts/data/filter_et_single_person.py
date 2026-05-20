@@ -8,13 +8,13 @@ for training on single-person shots.
 
 Usage:
     # From preprocessed index (after preprocess_et_data.py):
-    python scripts/filter_et_single_person.py --data-root data
+    python scripts/data/filter_et_single_person.py --data-root data
 
     # From raw E.T. root (no preprocess needed):
-    python scripts/filter_et_single_person.py --et-root data/et-data --output-root data
+    python scripts/data/filter_et_single_person.py --et-root data/et-data --output-root data
 
     # Include unknown in single-person subset:
-    python scripts/filter_et_single_person.py --data-root data --keep-unknown
+    python scripts/data/filter_et_single_person.py --data-root data --keep-unknown
 """
 
 import os

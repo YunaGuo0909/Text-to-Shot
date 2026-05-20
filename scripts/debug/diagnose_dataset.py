@@ -10,7 +10,7 @@ Checks:
   6. Outlier detection per split
 
 Usage:
-    python scripts/diagnose_dataset.py --data-root /transfer/stc-data --n 2000
+    python scripts/debug/diagnose_dataset.py --data-root /transfer/stc-data --n 2000
 """
 
 import os

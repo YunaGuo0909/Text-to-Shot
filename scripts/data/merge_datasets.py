@@ -13,7 +13,7 @@ Outputs:
   - <output-root>/norm_stats.json  (with --compute-norm-stats)
 
 Usage:
-    python scripts/merge_datasets.py \\
+    python scripts/data/merge_datasets.py \\
         --sources /transfer/stc-data /transfer/amass-stc-data /transfer/dance-stc-data \\
         --output-root /transfer/merged-stc-data \\
         --compute-norm-stats
